@@ -7,22 +7,24 @@ export async function login(identifier: string, password: string) {
   const input = identifier.toLowerCase().trim().replace(/^@/, '');
   const cleanPhone = input.replace(/[\s+()\-]/g, '');
 
-  // Single query: search by username OR by phone_number
+  // Single query: search by username OR by phone
   const { data: profiles, error: searchErr } = await supabase
     .from('profiles')
     .select('id, username, phone_number, name, avatar_url, bio')
-    .or(`username.eq.${input},phone_number.fts.${cleanPhone}`)
+    .or(`username.eq.${input},phone_number.eq.${cleanPhone}`)
     .limit(1);
 
   if (searchErr) throw new Error('Error al buscar usuario');
 
   let profile = profiles?.[0] || null;
 
-  // Fallback: try partial phone match if FTS didn't work
+  // Fallback: partial phone match
   if (!profile && cleanPhone.length >= 4) {
     const { data: all } = await supabase
       .from('profiles')
-      .select('id, username, phone_number, name, avatar_url, bio');
+      .select('id, username, phone_number, name, avatar_url, bio')
+      .ilike('phone_number', `%${cleanPhone}%`)
+      .limit(20);
     profile = all?.find(p => p.phone_number && p.phone_number.replace(/[\s+()\-]/g, '').includes(cleanPhone)) || null;
   }
 
@@ -118,30 +120,26 @@ export async function getChats(): Promise<Chat[]> {
 
   if (!chats) return [];
 
-  const result: Chat[] = [];
-
-  for (const chat of chats) {
-    const lastMsgQuery = await supabase
-      .from('messages')
-      .select('text, created_at, sender_id')
-      .eq('chat_id', chat.id)
-      .order('created_at', { ascending: false })
-      .limit(1);
+  const chatPromises = chats.map(async (chat) => {
+    const [lastMsgQuery, unreadQuery] = await Promise.all([
+      supabase
+        .from('messages')
+        .select('text, created_at, sender_id')
+        .eq('chat_id', chat.id)
+        .order('created_at', { ascending: false })
+        .limit(1),
+      supabase
+        .from('messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('chat_id', chat.id)
+        .neq('sender_id', userId)
+        .eq('status', 'sent'),
+    ]);
 
     const lastMsg = lastMsgQuery.data?.[0] || null;
-
-    const unreadQuery = await supabase
-      .from('messages')
-      .select('id', { count: 'exact', head: true })
-      .eq('chat_id', chat.id)
-      .neq('sender_id', userId)
-      .eq('status', 'sent');
-
     const unread = unreadQuery.count || 0;
 
-    // Determine the "other" user's info from the chat row itself
-    // The chats table stores the other participant's display info
-    result.push({
+    return {
       id: chat.id,
       name: chat.name || 'Usuario',
       avatar: chat.avatar || '',
@@ -155,9 +153,10 @@ export async function getChats(): Promise<Chat[]> {
       bio: chat.bio || '',
       messages: [],
       profileId: chat.profile_id || '',
-    });
-  }
+    };
+  });
 
+  const result = await Promise.all(chatPromises);
   return result;
 }
 
@@ -451,13 +450,16 @@ export async function getMoments(): Promise<Moment[]> {
   const { data } = await supabase
     .from('momentos')
     .select('*')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(50);
 
   if (!data) return [];
 
+  const ids = data.map(m => m.id);
   const { data: viewsData } = await supabase
     .from('momento_views')
-    .select('momento_id, user_id');
+    .select('momento_id, user_id')
+    .in('momento_id', ids);
 
   const viewMap: Record<string, number> = {};
   if (viewsData) {
