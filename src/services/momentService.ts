@@ -18,6 +18,7 @@ export async function getMoments(): Promise<Moment[]> {
     hasUnseen: m.has_unseen ?? true,
     image: m.image || '',
     caption: m.caption || '',
+    profileId: m.user_id || '',
   }));
 }
 

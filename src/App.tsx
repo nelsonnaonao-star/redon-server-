@@ -173,6 +173,7 @@ export default function App() {
             hasUnseen: true,
             image: m.image || '',
             caption: m.caption || '',
+            profileId: m.user_id || '',
             viewCount: 0,
             reactions: [],
           };
@@ -465,7 +466,7 @@ export default function App() {
               )
             )}
             {activeTab === 'moments' && (
-              <MomentsView profile={profile} moments={moments} onAddMoment={handleAddMoment} />
+              <MomentsView profile={profile} moments={moments} onAddMoment={handleAddMoment} userId={userId} />
             )}
             {activeTab === 'interests' && <InterestsView />}
             {activeTab === 'emprendedor' && (

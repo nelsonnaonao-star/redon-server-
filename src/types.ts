@@ -42,6 +42,7 @@ export interface Moment {
   hasUnseen: boolean;
   image: string;
   caption: string;
+  profileId?: string;
   viewCount?: number;
   reactions?: { emoji: string; count: number }[];
 }

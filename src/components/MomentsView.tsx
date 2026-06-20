@@ -8,9 +8,10 @@ interface MomentsViewProps {
   profile: UserProfile;
   moments: Moment[];
   onAddMoment: (newMoment: Moment) => void;
+  userId: string;
 }
 
-export default function MomentsView({ profile, moments, onAddMoment }: MomentsViewProps) {
+export default function MomentsView({ profile, moments, onAddMoment, userId }: MomentsViewProps) {
   const [localMoments, setLocalMoments] = useState<Moment[]>(moments);
   const [activeMoment, setActiveMoment] = useState<Moment | null>(null);
   const [isAddingMoment, setIsAddingMoment] = useState(false);
@@ -18,6 +19,10 @@ export default function MomentsView({ profile, moments, onAddMoment }: MomentsVi
   const [uploadedMedia, setUploadedMedia] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<'image' | 'video' | null>(null);
   const [showToast, setShowToast] = useState(false);
+
+  // Long-press delete state
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [showDeleteMenu, setShowDeleteMenu] = useState(false);
 
   // Advanced edit flow integration
   const [isEditing, setIsEditing] = useState(false);
@@ -38,6 +43,44 @@ export default function MomentsView({ profile, moments, onAddMoment }: MomentsVi
   const EMOJIS = ['❤️', '👍', '😂', '😮', '😢', '🙏'];
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Long-press refs
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTriggeredRef = useRef(false);
+
+  const startLongPress = (momId: string) => {
+    longPressTriggeredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      setDeleteTargetId(momId);
+      setShowDeleteMenu(true);
+    }, 800);
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleCardClick = (mom: Moment) => {
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    handleViewMoment(mom);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTargetId) return;
+    try {
+      await api.deleteMoment(deleteTargetId);
+      setLocalMoments(prev => prev.filter(m => m.id !== deleteTargetId));
+    } catch {}
+    setShowDeleteMenu(false);
+    setDeleteTargetId(null);
+  };
 
   // Auto-advance logic
   useEffect(() => {
@@ -194,7 +237,8 @@ export default function MomentsView({ profile, moments, onAddMoment }: MomentsVi
       time: "Hace un momento",
       hasUnseen: false,
       image: momentImage,
-      caption: captionText.trim()
+      caption: captionText.trim(),
+      profileId: userId,
     };
 
     onAddMoment(newM);
@@ -361,10 +405,18 @@ export default function MomentsView({ profile, moments, onAddMoment }: MomentsVi
 
           {/* List display */}
           <div className="divide-y divide-slate-100/70 dark:divide-slate-800/60">
-            {localMoments.map((mom) => (
+            {localMoments.map((mom) => {
+              const isOwn = mom.profileId === userId;
+              return (
               <div 
                 key={mom.id}
-                onClick={() => handleViewMoment(mom)}
+                onClick={() => handleCardClick(mom)}
+                onMouseDown={() => { if (isOwn) startLongPress(mom.id); }}
+                onMouseUp={cancelLongPress}
+                onMouseLeave={cancelLongPress}
+                onTouchStart={() => { if (isOwn) startLongPress(mom.id); }}
+                onTouchEnd={cancelLongPress}
+                onTouchMove={cancelLongPress}
                 className="py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 -mx-3 px-3 rounded-xl transition-all cursor-pointer group"
               >
                 <div className="flex items-center gap-3.5 pr-2 truncate">
@@ -387,6 +439,9 @@ export default function MomentsView({ profile, moments, onAddMoment }: MomentsVi
                         {mom.name.slice(0, 2).toUpperCase()}
                       </div>
                     )}
+                    {isOwn && (
+                      <span className="absolute -top-0.5 -right-0.5 bg-[#3390ec] text-white text-[7px] font-bold px-1 py-0.5 rounded-full border border-white dark:border-slate-900 leading-none">Tú</span>
+                    )}
                   </div>
 
                   <div className="truncate">
@@ -402,7 +457,8 @@ export default function MomentsView({ profile, moments, onAddMoment }: MomentsVi
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {localMoments.length === 0 && (
@@ -567,9 +623,11 @@ export default function MomentsView({ profile, moments, onAddMoment }: MomentsVi
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {activeMoment.profileId === userId && (
               <button onClick={handleDelete} className="text-xs text-white/40 hover:text-rose-400 p-1.5 bg-white/5 hover:bg-white/10 rounded-full cursor-pointer transition-all" title="Eliminar momento">
                 <Trash2 className="w-4 h-4" />
               </button>
+              )}
               <button onClick={() => setActiveMoment(null)} className="text-white hover:text-slate-300 p-2 bg-white/10 hover:bg-white/15 rounded-full backdrop-blur-sm cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
@@ -640,6 +698,44 @@ export default function MomentsView({ profile, moments, onAddMoment }: MomentsVi
         onClose={() => setSelectedFileForEdit(null)}
         onSave={handleFinishedEdit}
       />
+
+      {/* Long-press delete bottom sheet */}
+      {showDeleteMenu && (
+        <div
+          className="fixed inset-0 z-70 flex items-end justify-center bg-black/40 backdrop-blur-sm"
+          onClick={() => { setShowDeleteMenu(false); setDeleteTargetId(null); }}
+        >
+          <div
+            className="bg-white dark:bg-slate-800 rounded-t-3xl w-full max-w-md p-6 pb-10 shadow-2xl animate-slide-up"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-10 h-1 bg-slate-300 dark:bg-slate-600 rounded-full mx-auto mb-5" />
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-10 h-10 bg-rose-100 dark:bg-rose-900/30 rounded-full flex items-center justify-center">
+                <Trash2 className="w-5 h-5 text-rose-500" />
+              </div>
+              <div>
+                <h3 className="text-slate-900 dark:text-white font-bold text-sm">Eliminar momento</h3>
+                <p className="text-slate-500 dark:text-slate-400 text-xs mt-0.5">Esta acción no se puede deshacer.</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setShowDeleteMenu(false); setDeleteTargetId(null); }}
+                className="flex-1 py-2.5 text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-xl transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="flex-1 py-2.5 text-xs font-semibold text-white bg-rose-500 hover:bg-rose-600 rounded-xl transition-all cursor-pointer"
+              >
+                Sí, eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
