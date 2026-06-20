@@ -1,0 +1,92 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: 'Plus Jakarta Sans', sans-serif;
+
+  --color-brand: #2b7efb;
+  --color-brand-light: #eaf1ff;
+  --color-brand-dark: #1a62cc;
+
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f7f8fc;
+  --color-bg: #f0f2f6;
+  --color-bg-warm: #f5f6fa;
+
+  --color-text-primary: #0a0f1e;
+  --color-text-secondary: #5b677b;
+  --color-text-tertiary: #9aa3b4;
+
+  --color-border: #e5e7ef;
+  --color-border-light: #f0f1f6;
+
+  --color-online: #22c55e;
+
+  --color-dark-surface: #0d111d;
+  --color-dark-surface-secondary: #161c2e;
+  --color-dark-bg: #070a12;
+  --color-dark-text-primary: #e6edf5;
+  --color-dark-text-secondary: #8892a8;
+  --color-dark-text-tertiary: #5a657b;
+  --color-dark-border: #1e2740;
+  --color-dark-border-light: #141b2e;
+}
+
+@variant dark (&:where(.dark, .dark *));
+
+body {
+  background-color: var(--color-bg-warm);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.dark body,
+body.dark {
+  background-color: var(--color-dark-bg);
+  color: var(--color-dark-text-primary);
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+:root {
+  --bubble-color: #2b7efb;
+}
+
+.blue { --bubble-color: #2b7efb; }
+.green { --bubble-color: #10b981; }
+.purple { --bubble-color: #a855f7; }
+.gray { --bubble-color: #6b7280; }
+.orange { --bubble-color: #f97316; }
+.gradient-neon {
+  --bubble-color: linear-gradient(135deg, #f43f5e 0%, #a855f7 50%, #06b6d4 100%);
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.dark .glass {
+  background: rgba(13, 17, 29, 0.6);
+  border-color: rgba(30, 39, 64, 0.4);
+}

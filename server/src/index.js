@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
@@ -12,6 +13,7 @@ import messagesRoutes from './routes/messages.js';
 import contactsRoutes from './routes/contacts.js';
 import profileRoutes from './routes/profile.js';
 import businessesRoutes from './routes/businesses.js';
+import mediaRoutes from './routes/media.js';
 import { setupSocket, sendToUser } from './socket/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,6 +50,7 @@ async function main() {
   app.use('/api/contacts', contactsRoutes);
   app.use('/api/profile', profileRoutes);
   app.use('/api/businesses', businessesRoutes);
+  app.use('/api/v1/media', mediaRoutes);
 
   // WebSocket hook para mensajes via HTTP response
   app.use((req, res, next) => {
@@ -74,7 +77,7 @@ async function main() {
     next();
   });
 
-  const PORT = process.env.PORT || 3001;
+  const PORT = process.env.PORT || 5000;
   httpServer.listen(PORT, () => {
     console.log(`RED ON Server corriendo en puerto ${PORT}`);
   });

@@ -1,5 +1,10 @@
 node_modules/
-redon.db
-uploads/*
-!uploads/.gitkeep
-.env
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+*firebase-adminsdk*.json
+*service-account*.json

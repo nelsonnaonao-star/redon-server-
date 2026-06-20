@@ -1,0 +1,6 @@
+{
+  "name": "RED ON",
+  "description": "Aplicación de mensajería rápida, limpia e intuitiva inspirada en interfaces nativas modernas con estilo Telegram.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
