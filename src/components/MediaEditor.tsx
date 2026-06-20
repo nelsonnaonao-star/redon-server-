@@ -776,18 +776,25 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   const handleSlideshowStart = async () => {
     if (slideshowImages.length < 2) return;
     setIsGeneratingSlideshow(true);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
     try {
       const formData = new FormData();
       slideshowImages.forEach(file => formData.append('images', file));
       formData.append('duration', String(slideshowDuration));
       formData.append('transition', slideshowTransition);
 
-      const apiUrl = import.meta.env.VITE_RENDER_API_URL || 'http://localhost:3001';
+      const apiUrl = import.meta.env.VITE_RENDER_API_URL || 'https://redon-server.onrender.com';
       console.log('[SLIDESHOW] Uploading to', apiUrl);
       const response = await fetch(`${apiUrl}/api/v1/media/render-slideshow`, {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errBody = await response.json().catch(() => ({}));
@@ -799,7 +806,11 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
       alert(`Renderizado iniciado exitosamente.\n${result.data.images.length} imágenes · ~${result.data.estimatedDuration}`);
     } catch (err) {
       console.error('[SLIDESHOW] Upload error:', err);
-      alert('Error al enviar al servidor. Verifica que el backend esté corriendo.');
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        alert('El servidor no respondió a tiempo. Intenta con imágenes más pequeñas o menos imágenes.');
+      } else {
+        alert('Hubo un problema en el servidor al compilar el video. Verifica que el backend esté corriendo.');
+      }
     } finally {
       setIsGeneratingSlideshow(false);
     }

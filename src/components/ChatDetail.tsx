@@ -13,7 +13,6 @@ import {
   Calendar,
   Shield,
   Smile,
-  Paperclip,
   Clock,
   X,
   Image,
@@ -24,6 +23,7 @@ import {
   Camera,
   Mic,
   Square,
+  Trash2,
   Sticker
 } from 'lucide-react';
 import { AnimatePresence } from 'motion/react';
@@ -36,6 +36,7 @@ interface ChatDetailProps {
   chat: Chat;
   onBack: () => void;
   onSendMessage: (chatId: string, text: string) => void;
+  onSendAudioMessage?: (chatId: string, audioBlob: Blob, duration: number) => void;
   chatStyle: ChatStyle;
   onStartCall?: (chatId: string, contactId: string, contactName: string, contactAvatar: string) => void;
 }
@@ -44,6 +45,7 @@ export default function ChatDetail({
   chat, 
   onBack, 
   onSendMessage, 
+  onSendAudioMessage,
   chatStyle,
   onStartCall
 }: ChatDetailProps) {
@@ -69,8 +71,13 @@ export default function ChatDetail({
   // Voice recording
   const [isRecording, setIsRecording] = useState(false);
   const [micPermissionDenied, setMicPermissionDenied] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingDurationRef = useRef(0);
+  const shouldCancelRef = useRef(false);
 
   const startRecording = async () => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -80,9 +87,14 @@ export default function ChatDetail({
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setMicPermissionDenied(false);
+      audioStreamRef.current = stream;
+      audioChunksRef.current = [];
+      recordingDurationRef.current = 0;
+      shouldCancelRef.current = false;
+      setRecordingDuration(0);
+
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -91,12 +103,37 @@ export default function ChatDetail({
       };
 
       mediaRecorder.onstop = () => {
-        onSendMessage(chat.id, '🎤 [Nota de voz]');
-        stream.getTracks().forEach(track => track.stop());
+        cleanupRecording();
+        if (shouldCancelRef.current) {
+          audioChunksRef.current = [];
+          setRecordingDuration(0);
+          shouldCancelRef.current = false;
+          return;
+        }
+        const chunks = audioChunksRef.current;
+        if (chunks.length > 0) {
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          onSendAudioMessage?.(chat.id, blob, recordingDurationRef.current);
+        }
+        setRecordingDuration(0);
       };
 
       mediaRecorder.start();
       setIsRecording(true);
+
+      recordingIntervalRef.current = setInterval(() => {
+        recordingDurationRef.current += 1;
+        setRecordingDuration(recordingDurationRef.current);
+      }, 1000);
+
+      // Document-level release listener: suelta el dedo → envía
+      const handleRelease = () => {
+        stopRecording();
+        document.removeEventListener('mouseup', handleRelease);
+        document.removeEventListener('touchend', handleRelease);
+      };
+      document.addEventListener('mouseup', handleRelease);
+      document.addEventListener('touchend', handleRelease);
     } catch (err) {
       const errName = (err as Error).name || '';
       const errMsg = (err as Error).message || '';
@@ -111,8 +148,31 @@ export default function ChatDetail({
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      shouldCancelRef.current = false;
       mediaRecorderRef.current.stop();
-      setIsRecording(false);
+    }
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      shouldCancelRef.current = true;
+      mediaRecorderRef.current.stop();
+    } else {
+      cleanupRecording();
+      audioChunksRef.current = [];
+      setRecordingDuration(0);
+    }
+  };
+
+  const cleanupRecording = () => {
+    setIsRecording(false);
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = null;
+    }
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(track => track.stop());
+      audioStreamRef.current = null;
     }
   };
 
@@ -391,182 +451,198 @@ export default function ChatDetail({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Bottom Message Input Panel with customized Intelligent Attachment Menu */}
+      {/* Bottom Message Input Panel */}
       <div className="bg-white p-3 border-t border-slate-100 flex-shrink-0 z-20 shadow-[0_-2px_12px_rgba(0,0,0,0.02)] relative">
         {showStatusAlert && (
           <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-slate-900/90 text-white text-xs px-4 py-2 rounded-full whitespace-nowrap shadow-lg z-50">
             {showStatusAlert}
           </div>
         )}
-        <form onSubmit={handleSend} className="max-w-md mx-auto flex items-center gap-2 relative">
-          
-          {/* Attachment Grid Popover Panel (Style Telegram Clean) */}
-          {showAttachMenu && (
-            <div className="absolute bottom-14 left-0 bg-white rounded-3xl shadow-2xl p-4.5 w-64 border border-slate-100 z-50 anim-scale-up">
-              <div className="flex items-center justify-between mb-3 border-b border-slate-50 pb-2">
-                <span className="text-xs font-bold text-slate-800 uppercase tracking-tight">Compartir información</span>
-                <button 
-                  type="button"
-                  onClick={() => setShowAttachMenu(false)}
-                  className="text-slate-400 hover:text-slate-600 rounded-full"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              
-              <div className="grid grid-cols-3 gap-y-4 gap-x-1 select-none">
-                {/* 1. Galería */}
-                <button 
-                  type="button"
-                  onClick={() => {
-                    const selectEl = document.createElement('input');
-                    selectEl.type = 'file';
-                    selectEl.accept = 'image/*,video/*';
-                    selectEl.onchange = (e) => {
-                      const file = (e.target as HTMLInputElement).files?.[0];
-                      if (file) setSelectedFileForEdit(file);
-                    };
-                    selectEl.click();
-                    setShowAttachMenu(false);
-                  }}
-                  className="flex flex-col items-center gap-1 group focus:outline-none"
-                >
-                  <div className="w-11 h-11 bg-[#3390ec] text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-blue-100">
-                    <Image className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-600 mt-0.5">Galería</span>
-                </button>
 
-                {/* 2. Documento */}
-                <button 
-                  type="button"
-                  onClick={() => {
-                    alert("Documentos y archivos locales abiertos (Simulado)");
-                    setShowAttachMenu(false);
-                  }}
-                  className="flex flex-col items-center gap-1 group focus:outline-none"
-                >
-                  <div className="w-11 h-11 bg-orange-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-orange-100">
-                    <FileText className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-600 mt-0.5">Documento</span>
-                </button>
+        {/* Recording Panel — press-and-hold UX */}
+        {isRecording ? (
+          <div className="max-w-md mx-auto flex items-center gap-3 px-1">
+            <button
+              type="button"
+              onClick={cancelRecording}
+              className="p-2 rounded-full text-red-500 hover:bg-red-50 transition-all cursor-pointer"
+              title="Cancelar grabación"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
 
-                {/* 3. Música */}
-                <button 
-                  type="button"
-                  onClick={() => {
-                    alert("Librería de pistas de audio abierta (Simulado)");
-                    setShowAttachMenu(false);
+            {/* Waveform animation */}
+            <div className="flex-1 flex items-center justify-center gap-0.5 h-10">
+              {Array.from({ length: 30 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="w-1 bg-red-500 rounded-full"
+                  style={{
+                    height: `${20 + Math.sin(i * 0.8 + Date.now() * 0.005) * 30 + Math.random() * 20}%`,
+                    opacity: 0.6 + Math.random() * 0.4,
+                    transition: 'height 0.1s',
                   }}
-                  className="flex flex-col items-center gap-1 group focus:outline-none"
-                >
-                  <div className="w-11 h-11 bg-purple-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-purple-100">
-                    <Music className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-600 mt-0.5">Música</span>
-                </button>
-
-                {/* 4. Cámara */}
-                <button 
-                  type="button"
-                  onClick={() => {
-                    setSelectedFileForEdit(new File([""], "camara_mock.jpg", { type: "image/jpeg" }));
-                    setShowAttachMenu(false);
-                  }}
-                  className="flex flex-col items-center gap-1 group focus:outline-none"
-                >
-                  <div className="w-11 h-11 bg-red-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-red-100">
-                    <Camera className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-600 mt-0.5">Cámara</span>
-                </button>
-
-                {/* 5. Video */}
-                <button 
-                  type="button"
-                  onClick={() => {
-                    setSelectedFileForEdit(new File([""], "clip_sunset.mp4", { type: "video/mp4" }));
-                    setShowAttachMenu(false);
-                  }}
-                  className="flex flex-col items-center gap-1 group focus:outline-none"
-                >
-                  <div className="w-11 h-11 bg-pink-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-pink-100">
-                    <Video className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-600 mt-0.5">Video</span>
-                </button>
-
-                {/* 6. Ubicación */}
-                <button 
-                  type="button"
-                  onClick={() => {
-                    alert("GPS y coordenadas compartidas con éxito (Simulado)");
-                    setShowAttachMenu(false);
-                  }}
-                  className="flex flex-col items-center gap-1 group focus:outline-none"
-                >
-                  <div className="w-11 h-11 bg-emerald-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-emerald-100">
-                    <MapPin className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-600 mt-0.5">Ubicación</span>
-                </button>
-              </div>
+                />
+              ))}
             </div>
-          )}
 
-          {/* Hidden file selector input connected to the paperclip and system */}
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            className="hidden" 
-            onChange={handleFileSelected} 
-            accept="image/*,video/*" 
-          />
+            {/* Timer */}
+            <span className="text-sm font-mono font-bold text-red-500 min-w-[48px] text-center">
+              {String(Math.floor(recordingDuration / 60)).padStart(2, '0')}:{String(recordingDuration % 60).padStart(2, '0')}
+            </span>
 
-          {/* Plus icon to open details popover */}
-          <button 
-            type="button" 
-            onClick={() => setShowAttachMenu(!showAttachMenu)}
-            className={`p-1 bg-slate-100 text-slate-500 hover:text-[#3390ec] rounded-full transition-all cursor-pointer ${
-              showAttachMenu ? 'rotate-45 text-[#3390ec]' : ''
-            }`}
-            title="Más opciones de adjuntos"
-          >
-            <Plus className="w-4.5 h-4.5" />
-          </button>
+            {/* Hint */}
+            <span className="text-[10px] text-slate-400 italic hidden sm:block">Suelta para enviar</span>
+          </div>
+        ) : (
+          <form onSubmit={handleSend} className="max-w-md mx-auto flex items-center gap-2 relative">
+            
+            {/* Attachment Grid Popover Panel */}
+            {showAttachMenu && (
+              <div className="absolute bottom-14 left-0 bg-white rounded-3xl shadow-2xl p-4.5 w-64 border border-slate-100 z-50 anim-scale-up">
+                <div className="flex items-center justify-between mb-3 border-b border-slate-50 pb-2">
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-tight">Compartir información</span>
+                  <button 
+                    type="button"
+                    onClick={() => setShowAttachMenu(false)}
+                    className="text-slate-400 hover:text-slate-600 rounded-full"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                
+                <div className="grid grid-cols-3 gap-y-4 gap-x-1 select-none">
+                  {/* 1. Galería */}
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      const selectEl = document.createElement('input');
+                      selectEl.type = 'file';
+                      selectEl.accept = 'image/*,video/*';
+                      selectEl.onchange = (e) => {
+                        const file = (e.target as HTMLInputElement).files?.[0];
+                        if (file) setSelectedFileForEdit(file);
+                      };
+                      selectEl.click();
+                      setShowAttachMenu(false);
+                    }}
+                    className="flex flex-col items-center gap-1 group focus:outline-none"
+                  >
+                    <div className="w-11 h-11 bg-[#3390ec] text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-blue-100">
+                      <Image className="w-5 h-5" />
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-600 mt-0.5">Galería</span>
+                  </button>
 
-          {/* Paperclip attach trigger directly opens the native selector to route to our smart MediaEditor */}
-          <button 
-            type="button" 
-            onClick={() => {
-              fileInputRef.current?.click();
-            }}
-            className="p-2.5 rounded-full transition-all cursor-pointer text-slate-400 hover:text-slate-600 hover:bg-slate-50 relative"
-            title="Adjuntar y editar archivo"
-          >
-            <Paperclip className="w-5 h-5" />
-          </button>
+                  {/* 2. Documento */}
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      alert("Documentos y archivos locales abiertos (Simulado)");
+                      setShowAttachMenu(false);
+                    }}
+                    className="flex flex-col items-center gap-1 group focus:outline-none"
+                  >
+                    <div className="w-11 h-11 bg-orange-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-orange-100">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-600 mt-0.5">Documento</span>
+                  </button>
 
-          {/* Text Input area */}
-          <div className="flex-1 relative flex items-center select-none">
-            <input 
-              type="text" 
-              placeholder={isRecording ? 'Grabando...' : 'Escribe un mensaje...'}
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              disabled={isRecording}
-              className="w-full bg-[#f0f2f5] text-slate-800 placeholder-slate-400 text-sm pl-4 pr-10 py-2.5 rounded-2xl border border-transparent focus:outline-none focus:bg-white focus:border-brand/20 transition-all focus:shadow-[0_1px_4px_rgba(43,126,251,0.05)] disabled:opacity-50"
-            />
-            {!isRecording && (
-              <div className="absolute right-3">
+                  {/* 3. Música */}
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      alert("Librería de pistas de audio abierta (Simulado)");
+                      setShowAttachMenu(false);
+                    }}
+                    className="flex flex-col items-center gap-1 group focus:outline-none"
+                  >
+                    <div className="w-11 h-11 bg-purple-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-purple-100">
+                      <Music className="w-5 h-5" />
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-600 mt-0.5">Música</span>
+                  </button>
+
+                  {/* 4. Cámara */}
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setSelectedFileForEdit(new File([""], "camara_mock.jpg", { type: "image/jpeg" }));
+                      setShowAttachMenu(false);
+                    }}
+                    className="flex flex-col items-center gap-1 group focus:outline-none"
+                  >
+                    <div className="w-11 h-11 bg-red-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-red-100">
+                      <Camera className="w-5 h-5" />
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-600 mt-0.5">Cámara</span>
+                  </button>
+
+                  {/* 5. Video */}
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setSelectedFileForEdit(new File([""], "clip_sunset.mp4", { type: "video/mp4" }));
+                      setShowAttachMenu(false);
+                    }}
+                    className="flex flex-col items-center gap-1 group focus:outline-none"
+                  >
+                    <div className="w-11 h-11 bg-pink-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-pink-100">
+                      <Video className="w-5 h-5" />
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-600 mt-0.5">Video</span>
+                  </button>
+
+                  {/* 6. Ubicación */}
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      alert("GPS y coordenadas compartidas con éxito (Simulado)");
+                      setShowAttachMenu(false);
+                    }}
+                    className="flex flex-col items-center gap-1 group focus:outline-none"
+                  >
+                    <div className="w-11 h-11 bg-emerald-500 text-white rounded-full flex items-center justify-center transition-transform active:scale-90 group-hover:scale-105 shadow-md shadow-emerald-100">
+                      <MapPin className="w-5 h-5" />
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-600 mt-0.5">Ubicación</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Text Input area with [+ emoji] inside */}
+            <div className="flex-1 relative flex items-center select-none bg-[#f0f2f5] rounded-2xl border border-transparent focus-within:bg-white focus-within:border-brand/20 transition-all focus-within:shadow-[0_1px_4px_rgba(43,126,251,0.05)]">
+              {/* Plus button — left inside input */}
+              <button 
+                type="button" 
+                onClick={() => setShowAttachMenu(!showAttachMenu)}
+                className={`p-1.5 ml-1 rounded-full transition-all cursor-pointer ${
+                  showAttachMenu ? 'text-[#3390ec]' : 'text-slate-400 hover:text-[#3390ec]'
+                }`}
+                title="Más opciones de adjuntos"
+              >
+                <Plus className={`w-4.5 h-4.5 transition-transform ${showAttachMenu ? 'rotate-45' : ''}`} />
+              </button>
+
+              <input 
+                type="text" 
+                placeholder="Escribe un mensaje..."
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                className="flex-1 bg-transparent text-slate-800 placeholder-slate-400 text-sm px-2 py-2.5 focus:outline-none"
+              />
+
+              {/* Emoji button — right inside input */}
+              <div className="pr-1.5">
                 <button 
                   type="button" 
                   onClick={() => setShowStickerPicker(!showStickerPicker)}
-                  className="text-slate-400 hover:text-brand cursor-pointer relative"
+                  className="p-1.5 text-slate-400 hover:text-brand rounded-full transition-all cursor-pointer relative"
                   title="Emojis, stickers y GIFs"
                 >
-                  <Smile className="w-5 h-5" />
+                  <Smile className="w-4.5 h-4.5" />
                 </button>
                 <AnimatePresence>
                   {showStickerPicker && (
@@ -579,42 +655,39 @@ export default function ChatDetail({
                   )}
                 </AnimatePresence>
               </div>
-            )}
-          </div>
+            </div>
 
-          {/* Voice note button or Send */}
-          {inputText.trim() ? (
-            <button 
-              type="submit"
-              className="p-2.5 text-white rounded-full transition-all focus:outline-none cursor-pointer flex items-center justify-center bg-[#3390ec] hover:bg-[#2b7bc9] shadow-[0_2px_6px_rgba(51,144,236,0.25)] active:scale-95"
-              title="Enviar mensaje"
-            >
-              <Send className="w-4.5 h-4.5" />
-            </button>
-          ) : micPermissionDenied ? (
-            <button 
-              type="button"
-              onClick={requestMicPermission}
-              className="p-2.5 rounded-full bg-amber-500 text-white hover:bg-amber-600 shadow-[0_2px_6px_rgba(245,158,11,0.25)] transition-all cursor-pointer flex items-center justify-center"
-              title="Reintentar permiso de micrófono"
-            >
-              <Mic className="w-4.5 h-4.5" />
-            </button>
-          ) : (
-            <button 
-              type="button"
-              onClick={isRecording ? stopRecording : startRecording}
-              className={`p-2.5 rounded-full transition-all cursor-pointer flex items-center justify-center ${
-                isRecording 
-                  ? 'bg-red-500 text-white shadow-[0_2px_6px_rgba(239,68,68,0.25)] animate-pulse' 
-                  : 'bg-[#3390ec] text-white hover:bg-[#2b7bc9] shadow-[0_2px_6px_rgba(51,144,236,0.25)]'
-              }`}
-              title={isRecording ? 'Detener grabación' : 'Nota de voz'}
-            >
-              {isRecording ? <Square className="w-4 h-4" /> : <Mic className="w-4.5 h-4.5" />}
-            </button>
-          )}
-        </form>
+            {/* Voice note button or Send — outside input */}
+            {inputText.trim() ? (
+              <button 
+                type="submit"
+                className="p-2.5 text-white rounded-full transition-all focus:outline-none cursor-pointer flex items-center justify-center bg-[#3390ec] hover:bg-[#2b7bc9] shadow-[0_2px_6px_rgba(51,144,236,0.25)] active:scale-95"
+                title="Enviar mensaje"
+              >
+                <Send className="w-4.5 h-4.5" />
+              </button>
+            ) : micPermissionDenied ? (
+              <button 
+                type="button"
+                onClick={requestMicPermission}
+                className="p-2.5 rounded-full bg-amber-500 text-white hover:bg-amber-600 shadow-[0_2px_6px_rgba(245,158,11,0.25)] transition-all cursor-pointer flex items-center justify-center"
+                title="Reintentar permiso de micrófono"
+              >
+                <Mic className="w-4.5 h-4.5" />
+              </button>
+            ) : (
+              <button 
+                type="button"
+                onMouseDown={startRecording}
+                onTouchStart={startRecording}
+                className="p-2.5 rounded-full bg-[#3390ec] text-white hover:bg-[#2b7bc9] shadow-[0_2px_6px_rgba(51,144,236,0.25)] active:scale-95 transition-all cursor-pointer flex items-center justify-center select-none"
+                title="Mantén pulsado para grabar, suelta para enviar"
+              >
+                <Mic className="w-4.5 h-4.5" />
+              </button>
+            )}
+          </form>
+        )}
       </div>
 
       {/* Info/Metadata slide-over screen detailing user coordinates */}

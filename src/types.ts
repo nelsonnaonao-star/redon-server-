@@ -4,6 +4,9 @@ export interface Message {
   text: string;
   time: string;
   status?: 'sending' | 'sent' | 'delivered' | 'read';
+  audioUrl?: string;
+  audioDuration?: number;
+  mimeType?: string;
 }
 
 export interface Chat {

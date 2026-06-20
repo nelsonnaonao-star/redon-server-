@@ -274,6 +274,27 @@ export default function App() {
     }
   }, []);
 
+  const handleSendAudioMessage = useCallback(async (chatId: string, audioBlob: Blob, duration: number) => {
+    const msgId = String(Date.now());
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const audioUrl = URL.createObjectURL(audioBlob);
+    const text = '🎤 Nota de voz';
+
+    const newMessage: Message = {
+      id: msgId, sender: 'me' as const, text, time, status: 'sent' as const,
+      audioUrl, audioDuration: duration, mimeType: audioBlob.type || 'audio/webm',
+    };
+
+    setChats(prev => prev.map(c => {
+      if (c.id !== chatId) return c;
+      return { ...c, lastMessage: text, time, messages: [...c.messages, newMessage] };
+    }));
+
+    try {
+      await api.sendMessage(chatId, text);
+    } catch {}
+  }, []);
+
   // Load messages when opening a chat
   const handleSelectChat = useCallback(async (chatId: string) => {
     setActiveChatId(chatId);
@@ -422,6 +443,7 @@ export default function App() {
                   chat={activeChat}
                   onBack={() => setActiveChatId(null)}
                   onSendMessage={handleSendMessage}
+                  onSendAudioMessage={handleSendAudioMessage}
                   chatStyle={chatStyle}
                   onStartCall={handleStartCall}
                 />
