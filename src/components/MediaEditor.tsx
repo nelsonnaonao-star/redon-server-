@@ -4,7 +4,7 @@ import {
   X, Sparkles, RotateCw, Contrast, Type, Check, 
   Scissors, Play, Pause, SlidersHorizontal, Zap, 
   Music, Layers, RefreshCw, Volume2, Wand2,
-  Image, Smile, Layout, Eye, Waves, Loader, Crop, Diamond,
+  Image, Smile, Layout, Eye, Loader, Crop, Diamond,
   ArrowUp, Expand, Palette, Monitor, Headphones
 } from 'lucide-react';
 
@@ -58,7 +58,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   onSave
 }) => {
   // Main Panel Navigation
-  const [activeSubPanel, setActiveSubPanel] = useState<'none' | 'filters' | 'adjusts' | 'text' | 'trim' | 'audio' | 'transitions' | 'ai' | 'stickers' | 'collage' | 'kinetic' | 'transform' | 'slideshow'>('none');
+  const [activeSubPanel, setActiveSubPanel] = useState<'none' | 'filters' | 'adjusts' | 'text' | 'trim' | 'audio' | 'transitions' | 'ai' | 'stickers' | 'collage' | 'kinetic' | 'transform'>('none');
   
   // Custom states for active pro filters and sliders
   const [activeFilter, setActiveFilter] = useState('none');
@@ -99,13 +99,6 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   const [collageImages, setCollageImages] = useState<File[]>([]);
   const [collageLayout, setCollageLayout] = useState<'2grid' | '3grid' | '4grid'>('2grid');
 
-  // Slideshow states (crear video con imágenes)
-  const [slideshowImages, setSlideshowImages] = useState<File[]>([]);
-  const [slideshowDuration, setSlideshowDuration] = useState(3);
-  const [slideshowTransition, setSlideshowTransition] = useState<string>('crossfade');
-  const [slideshowTemplate, setSlideshowTemplate] = useState<'none' | 'catalogo' | 'oferta'>('none');
-  const [isGeneratingSlideshow, setIsGeneratingSlideshow] = useState(false);
-
   // Kinetic text animation states
   const [textAnimation, setTextAnimation] = useState<string>('none');
   const [textAnimationSpeed, setTextAnimationSpeed] = useState(1);
@@ -135,8 +128,6 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
-  const slideshowInputRef = useRef<HTMLInputElement>(null);
-  const MAX_SLIDESHOW_IMAGES = 8;
 
   const STICKER_PRESETS = [
     { id: 'heart', emoji: '❤️' },
@@ -748,76 +739,6 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     setActiveStickers(prev => prev.filter(s => s.id !== id));
   };
 
-  const handleSlideshowAddImages = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files ? Array.from(e.target.files) : [];
-    if (files.length > 0) {
-      setSlideshowImages(prev => {
-        const remaining = MAX_SLIDESHOW_IMAGES - prev.length;
-        return [...prev, ...files.slice(0, remaining)];
-      });
-    }
-    if (slideshowInputRef.current) slideshowInputRef.current.value = '';
-  };
-
-  const handleSlideshowRemoveImage = (index: number) => {
-    setSlideshowImages(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleSlideshowReorder = (from: number, to: number) => {
-    if (to < 0 || to >= slideshowImages.length) return;
-    setSlideshowImages(prev => {
-      const arr = [...prev];
-      const [moved] = arr.splice(from, 1);
-      arr.splice(to, 0, moved);
-      return arr;
-    });
-  };
-
-  const handleSlideshowStart = async () => {
-    if (slideshowImages.length < 2) return;
-    setIsGeneratingSlideshow(true);
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-    try {
-      const formData = new FormData();
-      slideshowImages.forEach(file => formData.append('images', file));
-      formData.append('duration', String(slideshowDuration));
-      formData.append('transition', slideshowTransition);
-
-      const apiUrl = import.meta.env.VITE_RENDER_API_URL || 'https://redon-server.onrender.com';
-      console.log('[SLIDESHOW] Uploading to', apiUrl);
-      const response = await fetch(`${apiUrl}/api/v1/media/render-slideshow`, {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errBody = await response.json().catch(() => ({}));
-        throw new Error(errBody.error || `Error del servidor: ${response.status}`);
-      }
-
-      const result = await response.json();
-      console.log('[SLIDESHOW] Render accepted:', result);
-      alert(`Renderizado iniciado exitosamente.\n${result.data.images.length} imágenes · ~${result.data.estimatedDuration}`);
-    } catch (err) {
-      console.error('[SLIDESHOW] Upload error:', err);
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        alert('El servidor no respondió a tiempo. Intenta con imágenes más pequeñas o menos imágenes.');
-      } else {
-        alert('Hubo un problema en el servidor al compilar el video. Verifica que el backend esté corriendo.');
-      }
-    } finally {
-      setIsGeneratingSlideshow(false);
-    }
-  };
-
-
-
   // === Collage ===
   const handleCollageImageAdd = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -888,7 +809,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     return {};
   };
 
-  // Reusable content block (image/video/slideshow + text + stickers)
+  // Reusable content block (image/video + text + stickers)
   const contentBlock = (
     <div
       key={`${videoTransition}-${animationTriggerKey}`}
@@ -1092,7 +1013,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
       <motion.button
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.9 }}
-        onClick={() => { setSlideshowImages([]); setActiveSubPanel('none'); onClose(); }}
+        onClick={() => { setActiveSubPanel('none'); onClose(); }}
         className="absolute left-6 top-6 z-50 bg-white/10 hover:bg-white/20 active:scale-95 text-white p-3.5 rounded-full backdrop-blur-md cursor-pointer transition-all border border-white/5"
         title="Descartar y Cerrar"
       >
@@ -1656,141 +1577,6 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                 </motion.div>
               )}
 
-              {/* 10. SLIDESHOW — Crear video con imágenes */}
-              {activeSubPanel === 'slideshow' && !isVideo && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 10 }}
-                  className="absolute bottom-0 w-full bg-black/95 backdrop-blur-md border border-white/10 p-3 rounded-2xl flex flex-col gap-2 max-h-80 overflow-y-auto"
-                >
-                  {/* Phase 1: Image Selection */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-white/50 font-bold flex items-center gap-1.5">
-                      <Sparkles className="w-3 h-3 text-yellow-400" />
-                      <span>Crear Video con Imágenes</span>
-                    </span>
-                    {slideshowImages.length > 0 && (
-                      <button onClick={() => setSlideshowImages([])} className="text-[9px] text-rose-400 hover:text-white px-2 py-0.5 rounded bg-rose-500/10 cursor-pointer">
-                        Limpiar todo
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Image list */}
-                  {slideshowImages.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto border border-white/5 rounded-lg p-1.5">
-                      {slideshowImages.map((img, i) => (
-                        <div key={i} className="flex items-center gap-1 bg-white/10 rounded-full px-2 py-0.5 group">
-                          <span className="text-[9px] text-white/70 truncate max-w-[60px]">{img.name}</span>
-                          <button onClick={() => handleSlideshowRemoveImage(i)} className="text-rose-400 text-[9px] cursor-pointer">✕</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Add images */}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={handleSlideshowAddImages}
-                    className="hidden"
-                    ref={slideshowInputRef}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => slideshowInputRef.current?.click()}
-                    disabled={slideshowImages.length >= MAX_SLIDESHOW_IMAGES}
-                    className={`text-[9px] font-bold px-2.5 py-1 rounded-lg border border-dashed transition-all cursor-pointer self-start ${
-                      slideshowImages.length >= MAX_SLIDESHOW_IMAGES
-                        ? 'border-white/5 bg-white/5 text-white/30 cursor-not-allowed'
-                        : 'border-yellow-500/30 bg-yellow-500/10 text-yellow-300 hover:bg-yellow-500/20'
-                    }`}
-                  >
-                    + Añadir ({slideshowImages.length}/{MAX_SLIDESHOW_IMAGES})
-                  </button>
-
-                  {/* Phase 2: Template Selection */}
-                  {slideshowImages.length >= 2 && (
-                    <div className="border-t border-white/10 pt-2">
-                      <span className="text-[9px] text-white/40 font-bold">Plantilla rápida</span>
-                      <div className="flex gap-2 mt-1">
-                        <button
-                          onClick={() => {
-                            setSlideshowTemplate('catalogo');
-                            setSlideshowDuration(5);
-                            setSlideshowTransition('fadezoom');
-                          }}
-                          className={`flex-1 text-[9px] font-bold py-1.5 rounded-lg border transition-all cursor-pointer ${
-                            slideshowTemplate === 'catalogo'
-                              ? 'border-yellow-400 bg-yellow-400/20 text-yellow-200'
-                              : 'border-white/10 bg-white/5 text-white/70 hover:bg-white/10'
-                          }`}
-                        >
-                          📦 Modo Catálogo
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSlideshowTemplate('oferta');
-                            setSlideshowDuration(3);
-                            setSlideshowTransition('slide');
-                          }}
-                          className={`flex-1 text-[9px] font-bold py-1.5 rounded-lg border transition-all cursor-pointer ${
-                            slideshowTemplate === 'oferta'
-                              ? 'border-orange-400 bg-orange-400/20 text-orange-200'
-                              : 'border-white/10 bg-white/5 text-white/70 hover:bg-white/10'
-                          }`}
-                        >
-                          🏷️ Modo Oferta Comercial
-                        </button>
-                      </div>
-                      {/* Manual config */}
-                      <div className="flex items-center gap-1.5 mt-2">
-                        <span className="text-[8px] text-white/40">Duración:</span>
-                        <select
-                          value={slideshowDuration}
-                          onChange={e => setSlideshowDuration(Number(e.target.value))}
-                          className="bg-white/10 border border-white/10 text-white rounded px-1 py-0.5 text-[9px]"
-                        >
-                          {[1, 2, 3, 4, 5, 7, 10].map(d => <option key={d} value={d}>{d}s</option>)}
-                        </select>
-                        <span className="text-[8px] text-white/40">Transición:</span>
-                        <select
-                          value={slideshowTransition}
-                          onChange={e => setSlideshowTransition(e.target.value)}
-                          className="bg-white/10 border border-white/10 text-white rounded px-1 py-0.5 text-[9px]"
-                        >
-                          <option value="crossfade">Fundido</option>
-                          <option value="slide">Deslizar</option>
-                          <option value="zoom">Zoom</option>
-                          <option value="fadezoom">Fundido + Zoom</option>
-                          <option value="wipe-left">Cortina izquierda</option>
-                          <option value="wipe-right">Cortina derecha</option>
-                          <option value="wipe-up">Cortina arriba</option>
-                          <option value="wipe-down">Cortina abajo</option>
-                          <option value="radial">Revelado radial</option>
-                          <option value="blur">Desenfoque</option>
-                        </select>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Phase 3: Generate */}
-                  <button
-                    onClick={handleSlideshowStart}
-                    disabled={slideshowImages.length < 2 || isGeneratingSlideshow}
-                    className="w-full py-1.5 bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-[10px] font-bold text-white flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                  >
-                    {isGeneratingSlideshow ? (
-                      <><span className="animate-spin w-3 h-3 border-2 border-white/30 border-t-white rounded-full" /><span>Subiendo...</span></>
-                    ) : (
-                      <><Sparkles className="w-3 h-3" /><span>Generar Video Publicitario ({slideshowImages.length} imágenes, ~{(slideshowImages.length * slideshowDuration).toFixed(1)}s)</span></>
-                    )}
-                  </button>
-                </motion.div>
-              )}
-
               {/* 11. KINETIC TEXT ANIMATION (Eye) */}
               {activeSubPanel === 'kinetic' && (
                 <motion.div 
@@ -2091,20 +1877,6 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
             )}
 
             {/* Slideshow — Crear Video con Imágenes */}
-            {!isVideo && (
-              <button
-                onClick={() => {
-                  setActiveSubPanel(prev => prev === 'slideshow' ? 'none' : 'slideshow');
-                }}
-                className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                  activeSubPanel === 'slideshow' ? 'bg-gradient-to-r from-yellow-500 to-orange-500 text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-                }`}
-                title="Hacer Video con Imágenes"
-              >
-                <Waves className="w-5 h-5" />
-              </button>
-            )}
-
             {/* Kinetic Text Animation */}
             <button
               onClick={() => setActiveSubPanel(prev => prev === 'kinetic' ? 'none' : 'kinetic')}
