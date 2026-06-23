@@ -269,20 +269,9 @@ router.post('/webhook', async (req, res) => {
               type: 'message',
               contactId: sender_id,
             },
-            notification: {
-              title: senderName || 'RED ON',
-              body: text || 'Nuevo mensaje',
-            },
             android: {
               priority: 'high',
               ttl: '86400s',
-              notification: {
-                channel_id: 'redon-messages',
-                tag: chat_id,
-                click_action: 'OPEN_APP',
-                notification_count: 1,
-                visibility: 'public',
-              },
             },
           };
           const response = await admin.messaging().send(message);

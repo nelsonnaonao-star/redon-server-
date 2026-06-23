@@ -48,13 +48,6 @@ public class CallFcmService extends FirebaseMessagingService {
         if ("call".equals(type)) {
             showCallNotification(message);
         } else {
-            // If the server included a notification block, let the system handle it.
-            // This ensures the notification appears even if the app is killed or
-            // OEM battery optimization blocks background processing.
-            if (message.getNotification() != null) {
-                Log.d(TAG, "System will show notification for message type");
-                return;
-            }
             showMessageNotification(message);
         }
     }
@@ -144,6 +137,21 @@ public class CallFcmService extends FirebaseMessagingService {
 
         int notificationId = (chatId != null ? chatId.hashCode() : (int) System.currentTimeMillis());
 
+        // Ensure the channel exists (handle app not yet opened case)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel chan = new NotificationChannel(
+                CHANNEL_MESSAGES, "Mensajes", NotificationManager.IMPORTANCE_HIGH
+            );
+            chan.setDescription("Notificaciones de mensajes");
+            chan.enableVibration(true);
+            chan.setVibrationPattern(new long[]{0, 300, 200, 300});
+            chan.enableLights(true);
+            chan.setShowBadge(true);
+            chan.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
+            NotificationManager nmgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nmgr != null) nmgr.createNotificationChannel(chan);
+        }
+
         Intent intent = new Intent(this, MainActivity.class);
         intent.setAction("OPEN_CHAT");
         intent.putExtra("chatId", chatId);
@@ -154,22 +162,24 @@ public class CallFcmService extends FirebaseMessagingService {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        RemoteViews notificationLayout = new RemoteViews(getPackageName(), R.layout.message_notification);
-        notificationLayout.setTextViewText(R.id.msg_title, title);
-        notificationLayout.setTextViewText(R.id.msg_body, body);
+        Uri soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_MESSAGES)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setCustomContentView(notificationLayout)
-            .setCustomHeadsUpContentView(notificationLayout)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
+            .setSound(soundUri)
+            .setVibrate(new long[]{0, 300, 200, 300})
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setNumber(notifCount)
             .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setColor(Color.parseColor("#1E88E5"));
 
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
