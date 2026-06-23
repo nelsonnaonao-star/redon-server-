@@ -41,6 +41,7 @@ export interface MomentAnimMeta {
   textAnimation?: string;
   textAnimationSpeed?: number;
   textFont?: string;
+  textFontSize?: number;
   textColor?: string;
   textPositionX?: number;
   textPositionY?: number;

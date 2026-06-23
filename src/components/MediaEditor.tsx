@@ -1056,23 +1056,26 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
         </div>
       ) : !isVideo ? (
                 <div className="relative w-full h-full flex items-center justify-center">
-                  <img
-                    ref={imageRef}
-                    src={fileUrl || ''}
-                    alt="Preview to Edit"
-                    className="max-h-full w-full object-contain transition-all duration-300"
-                    style={{
-                      filter: filterStyle
-                    }}
-                  />
+                  {fileUrl && (
+                    <img
+                      ref={imageRef}
+                      src={fileUrl}
+                      alt="Preview to Edit"
+                      className="max-h-full w-full object-contain transition-all duration-300"
+                      style={{
+                        filter: filterStyle
+                      }}
+                    />
+                  )}
                   {crop && <CropOverlay crop={crop} setCrop={setCrop} cropAspect={cropAspect} saveState={saveState} />}
                 </div>
               ) : (
                 <div className="relative w-full h-full bg-black flex items-center justify-center">
-                  <video 
-                    ref={videoRef}
-                    src={fileUrl || ''} 
-                    className="w-full h-full object-contain"
+                  {fileUrl && (
+                    <video 
+                      ref={videoRef}
+                      src={fileUrl} 
+                      className="w-full h-full object-contain"
                     autoPlay
                     muted={isVideoMuted}
                     loop
@@ -1084,7 +1087,8 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                     style={{
                       filter: filterStyle
                     }}
-                  />
+                   />
+                  )}
                   
                   {/* Invisible tag for synced loaded secondary audio track */}
                   {uploadedAudioUrl && (
