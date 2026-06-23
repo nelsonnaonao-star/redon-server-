@@ -1,7 +1,9 @@
 import express from 'express';
 import webpush from 'web-push';
 import { createClient } from '@supabase/supabase-js';
-import { initializeApp, credential, apps } from 'firebase-admin';
+import { initializeApp, apps } from 'firebase-admin';
+import { cert } from 'firebase-admin/credential';
+import { getMessaging } from 'firebase-admin/messaging';
 
 const router = express.Router();
 
@@ -29,22 +31,17 @@ try {
 if (serviceAccount && apps.length === 0) {
     try {
         initializeApp({
-            credential: credential.cert(serviceAccount)
+            credential: cert(serviceAccount)
         });
-        console.log("✅ Firebase Admin inicializado correctamente con Named Exports.");
+        console.log("✅ Firebase Admin inicializado correctamente con ESM imports.");
     } catch (error) {
         console.error("❌ Error en initializeApp:", error.message);
     }
 }
 
-async function initFirebaseAdmin() {
+function initFirebaseAdmin() {
   if (apps.length === 0) return null;
-  try {
-    const { getMessaging } = await import('firebase-admin/messaging');
-    return { messaging: getMessaging };
-  } catch {
-    return null;
-  }
+  return { messaging: getMessaging };
 }
 
 if (vapidPublicKey && vapidPrivateKey) {
