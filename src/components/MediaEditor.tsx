@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, Sparkles, RotateCw, Contrast, Type, Check, 
@@ -7,12 +7,25 @@ import {
   Image, Smile, Layout, Eye, Loader, Crop, Diamond,
   ArrowUp, Expand, Palette, Monitor, Headphones
 } from 'lucide-react';
+import { getMusicLibrary, getMusicCategories, MusicTrack } from '../services/stickerService';
+
+export interface AnimMeta {
+  textContent: string;
+  textAnimation: string;
+  textAnimationSpeed: number;
+  textFont: string;
+  textColor: string;
+  textPositionX: number;
+  textPositionY: number;
+  textBg: boolean;
+  activeFilter: string;
+}
 
 interface MediaEditorProps {
   isOpen: boolean;
   file: File | null;
   onClose: () => void;
-  onSave: (editedFile: File, caption: string) => void;
+  onSave: (editedFile: File, caption: string, animMeta: AnimMeta) => void;
 }
 
 const FILTERS = [
@@ -58,7 +71,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   onSave
 }) => {
   // Main Panel Navigation
-  const [activeSubPanel, setActiveSubPanel] = useState<'none' | 'filters' | 'adjusts' | 'text' | 'trim' | 'audio' | 'transitions' | 'ai' | 'stickers' | 'collage' | 'kinetic' | 'transform'>('none');
+  const [activeSubPanel, setActiveSubPanel] = useState<'none' | 'filters' | 'adjusts' | 'text' | 'trim' | 'audio' | 'musiclib' | 'transitions' | 'ai' | 'stickers' | 'collage' | 'kinetic' | 'transform' | 'export'>('none');
   
   // Custom states for active pro filters and sliders
   const [activeFilter, setActiveFilter] = useState('none');
@@ -98,6 +111,13 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   // Collage states
   const [collageImages, setCollageImages] = useState<File[]>([]);
   const [collageLayout, setCollageLayout] = useState<'2grid' | '3grid' | '4grid'>('2grid');
+  const [collageUrls, setCollageUrls] = useState<string[]>([]);
+
+  useEffect(() => {
+    const urls = collageImages.map(f => URL.createObjectURL(f));
+    setCollageUrls(urls);
+    return () => urls.forEach(u => URL.revokeObjectURL(u));
+  }, [collageImages]);
 
   // Kinetic text animation states
   const [textAnimation, setTextAnimation] = useState<string>('none');
@@ -158,7 +178,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   ];
 
   // Video-specific trimming states
-  const [isPlay, setIsPlay] = useState(false);
+  const [isPlay, setIsPlay] = useState(true);
   const [videoDuration, setVideoDuration] = useState(15);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(15);
@@ -237,16 +257,42 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     return () => { running = false; cancelAnimationFrame(rainAnimRef.current); window.removeEventListener('resize', resize); };
   }, [activeFilter]);
 
-  if (!isOpen || !file) return null;
-
+  // Memoize fileUrl so it doesn't change on every render (avoids image/video reload)
   const effectiveFile = processedFile || file;
-  const isVideo = effectiveFile?.type?.startsWith('video/') ?? file.type.startsWith('video/');
-  const fileUrl = (effectiveFile?.size ?? file.size) > 0 
-    ? URL.createObjectURL(effectiveFile ?? file) 
-    : (isVideo 
-        ? "https://assets.mixkit.co/videos/preview/mixkit-forest-stream-in-the-sunlight-529-large.mp4" 
-        : "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800&q=80"
-      );
+  const isVideo = useMemo(
+    () => effectiveFile?.type?.startsWith('video/') ?? false,
+    [effectiveFile]
+  );
+  const fileUrl = useMemo(() => {
+    if (!effectiveFile) return '';
+    if (effectiveFile.size > 0) {
+      return URL.createObjectURL(effectiveFile);
+    }
+    return isVideo
+      ? 'https://assets.mixkit.co/videos/preview/mixkit-forest-stream-in-the-sunlight-529-large.mp4'
+      : 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800&q=80';
+  }, [effectiveFile, isVideo]);
+
+  // Revoke old blob URL when fileUrl changes or on unmount
+  useEffect(() => {
+    return () => {
+      if (fileUrl && fileUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(fileUrl);
+      }
+    };
+  }, [fileUrl]);
+
+  // Track whether the video is muted (needed for autoplay on mobile)
+  const [isVideoMuted, setIsVideoMuted] = useState(true);
+
+  // Ensure video keeps playing after unmute (mobile autoplay policy)
+  useEffect(() => {
+    if (videoRef.current && isPlay) {
+      videoRef.current.play().catch(() => setIsVideoMuted(true));
+    }
+  }, [isVideoMuted]);
+
+  if (!isOpen || !file) return null;
 
   const handleRotation = () => {
     setRotation((prev) => (prev + 90) % 360);
@@ -279,8 +325,79 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     }
   };
 
+  // Render all collage images as a single combined grid image
+  const renderCollageGrid = async (): Promise<File> => {
+    const loadImg = (file: File): Promise<HTMLImageElement> =>
+      new Promise(resolve => {
+        const img = new window.Image();
+        img.onload = () => { URL.revokeObjectURL(img.src); resolve(img); };
+        img.onerror = () => { URL.revokeObjectURL(img.src); resolve(img); };
+        img.src = URL.createObjectURL(file);
+      });
+
+    const loaded = (await Promise.all(collageImages.slice(0, getCollageMaxImages()).map(loadImg))).filter(i => i.width > 0);
+    if (loaded.length === 0) return collageImages[0];
+
+    const cols = 2;
+    const rows = collageLayout === '4grid' ? 2 : collageLayout === '3grid' ? 2 : 1;
+    const cellW = 600;
+    const cellH = 450;
+    const gap = 4;
+    const cw = cols * cellW + (cols - 1) * gap;
+    const ch = rows * cellH + (rows - 1) * gap;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cw;
+    canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return collageImages[0];
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cw, ch);
+
+    const cf = (val: number) => (val / 100).toFixed(2);
+    let filter = `brightness(${cf(brightness)}) contrast(${cf(contrast)}) saturate(${cf(saturation)})`;
+    if (activeFilter === 'bw') filter += ' grayscale(1)';
+    else if (activeFilter === 'cinematic') filter += ' saturate(1.5) contrast(1.25) sepia(0.15)';
+    else if (activeFilter === 'vivid') filter += ' saturate(2) brightness(1.05)';
+    else if (activeFilter === 'warm') filter += ' sepia(0.3) saturate(1.1)';
+    else if (activeFilter === 'cyber') filter += ' hue-rotate(60deg) saturate(1.5) contrast(1.1)';
+    ctx.filter = filter;
+
+    const positions: { col: number; row: number }[] = [];
+    if (collageLayout === '3grid') {
+      positions.push({ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 1, row: 1 });
+    } else {
+      for (let i = 0; i < loaded.length; i++) {
+        positions.push({ col: i % cols, row: Math.floor(i / cols) });
+      }
+    }
+
+    for (let i = 0; i < loaded.length && i < positions.length; i++) {
+      const p = positions[i];
+      const img = loaded[i];
+      const x = p.col * (cellW + gap);
+      const y = p.row * (cellH + gap);
+      const drawW = collageLayout === '3grid' && i === 0 ? cellW : cellW;
+      const drawH = collageLayout === '3grid' && i === 0 ? cellH * 2 + gap : cellH;
+      ctx.drawImage(img, x, y, drawW, drawH);
+    }
+
+    return new Promise(resolve => {
+      canvas.toBlob(blob => {
+        if (blob) resolve(new File([blob], 'collage_' + Date.now() + '.jpg', { type: 'image/jpeg' }));
+        else resolve(collageImages[0]);
+      }, 'image/jpeg', 0.92);
+    });
+  };
+
   // Render image with all edits baked into a canvas, then save
   const renderImageWithEdits = async (imgFile: File): Promise<File> => {
+    // Collage mode → render combined grid
+    if (collageImages.length > 0) {
+      return renderCollageGrid();
+    }
+
     return new Promise((resolve) => {
       const img = new window.Image();
       img.onload = () => {
@@ -569,7 +686,18 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
       outputFile = await renderImageWithEdits(baseFile);
     }
     
-    onSave(outputFile, finalCaption);
+    const animMeta: AnimMeta = {
+      textContent: textOverlay,
+      textAnimation: textAnimation,
+      textAnimationSpeed: textAnimationSpeed,
+      textFont: textFont,
+      textColor: textColor,
+      textPositionX: textPosition.x,
+      textPositionY: textPosition.y,
+      textBg: textBg,
+      activeFilter: activeFilter,
+    };
+    onSave(outputFile, finalCaption, animMeta);
   };
 
   // CSS Filter formulation based on active sliders and presets
@@ -744,10 +872,11 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     const files = e.target.files;
     if (files) {
       const newFiles = Array.from(files);
-      const maxCollage = collageLayout === '2grid' ? 1 : collageLayout === '3grid' ? 2 : 3;
+      const maxCollage = getCollageMaxImages();
       const remaining = maxCollage - collageImages.length;
       setCollageImages(prev => [...prev, ...newFiles.slice(0, remaining)]);
     }
+    e.target.value = '';
   };
 
   const handleCollageRemove = (index: number) => {
@@ -813,30 +942,44 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   const contentBlock = (
     <div
       key={`${videoTransition}-${animationTriggerKey}`}
-      className="relative transition-all duration-300 rounded-3xl overflow-hidden shadow-2xl bg-black/40 border border-white/10"
+      className="relative transition-all duration-300 overflow-hidden bg-black/40"
       style={{
         transform: `rotate(${rotation}deg) scale(${zoomLevel}) translate(${panX}px, ${panY}px)`,
         ...getTransitionStyle()
       }}
     >
-      {!isVideo ? (
+      {collageImages.length > 0 ? (
+        <div className={`grid gap-0.5 p-0.5 w-full min-h-[40vh] ${collageLayout === '2grid' ? 'grid-cols-2' : 'grid-cols-2'}`}>
+          {collageUrls.slice(0, getCollageMaxImages()).map((url, i) => (
+            <img
+              key={i}
+              src={url}
+              alt={`Collage ${i + 1}`}
+              className={`w-full h-full object-cover rounded-lg ${i === 0 && collageLayout === '3grid' ? 'row-span-2' : ''} ${collageLayout === '4grid' ? 'aspect-square' : ''}`}
+            />
+          ))}
+        </div>
+      ) : !isVideo ? (
                 <img
                   ref={imageRef}
                   src={fileUrl}
                   alt="Preview to Edit"
-                  className="max-h-[48vh] md:max-h-[55vh] object-contain rounded-3xl transition-all duration-300"
+                  className="max-h-full w-full object-contain transition-all duration-300"
                   style={{
                     filter: filterStyle
                   }}
                 />
               ) : (
-                <div className="relative rounded-3xl overflow-hidden max-h-[48vh] md:max-h-[55vh]">
+                <div className="relative w-full h-full bg-black flex items-center justify-center">
                   <video 
                     ref={videoRef}
                     src={fileUrl} 
-                    className="max-h-[48vh] md:max-h-[55vh] object-contain"
-                    controls={false}
+                    className="w-full h-full object-contain"
+                    autoPlay
+                    muted={isVideoMuted}
                     loop
+                    playsInline
+                    controls={false}
                     onLoadedMetadata={handleVideoLoadedMetadata}
                     onTimeUpdate={handleVideoTimeUpdate}
                     id="editor-video-preview"
@@ -854,12 +997,17 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                     />
                   )}
 
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+                  {/* Subtle play/pause overlay — auto-hides after 3s */}
+                  <div
+                    className="absolute inset-0 flex items-center justify-center z-10"
+                    onClick={() => setIsPlay(!isPlay)}
+                  >
                     <motion.button
-                      whileHover={{ scale: 1.1 }}
+                      initial={{ opacity: 1 }}
+                      animate={{ opacity: isPlay ? 0 : 1 }}
+                      whileHover={{ opacity: 1 }}
                       whileTap={{ scale: 0.85 }}
-                      onClick={() => setIsPlay(!isPlay)}
-                      className="p-4 bg-white/20 hover:bg-white/30 backdrop-blur-md rounded-full text-white transition-all cursor-pointer"
+                      className="p-4 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full text-white transition-all cursor-pointer"
                     >
                       {isPlay ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 fill-current" />}
                     </motion.button>
@@ -871,11 +1019,23 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                       <span className="text-[10px] font-bold text-yellow-300">{playbackSpeed}x</span>
                     </div>
                   )}
+
+                  {/* Volume toggle (mute/unmute original video audio) */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setIsVideoMuted(!isVideoMuted); }}
+                    className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 backdrop-blur p-2 rounded-full text-white transition-all z-20 cursor-pointer"
+                  >
+                    {isVideoMuted ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                    )}
+                  </button>
                 </div>
               )}
 
-              {/* Text Overlay Rendered directly on top with selected fonts and custom color */}
-              {textOverlay && (
+              {/* Text Overlay — only on single image/video */}
+              {textOverlay && collageImages.length === 0 && (
                 <motion.div 
                   drag
                   dragMomentum={false}
@@ -911,8 +1071,8 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                 />
               )}
 
-              {/* AR Stickers rendered on top */}
-              {activeStickers.map((s) => (
+              {/* AR Stickers rendered on top — only on single image/video */}
+              {activeStickers.length > 0 && collageImages.length === 0 && activeStickers.map((s) => (
                 <motion.div
                   key={s.id}
                   drag
@@ -935,6 +1095,181 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
               ))}
             </div>
           );
+
+  // Bottom bar shared by image and video — extracted for guaranteed identical rendering
+  const renderBottomBar = () => (
+    <div className="w-full bg-zinc-950 pb-safe flex flex-col">
+      {/* Caption / pie de foto input */}
+      <input
+        type="text"
+        placeholder="Escribe un comentario o pie de foto..."
+        value={caption}
+        onChange={(e) => setCaption(e.target.value)}
+        className="w-full bg-black/60 border-b border-white/5 p-3 px-4 text-sm text-white placeholder-white/30 focus:outline-none"
+      />
+      {/* Scrollable tool icons — h-16 ensures visible height, snap-x for swipe */}
+      <div className="w-full h-16 bg-zinc-950 flex items-center gap-2 overflow-x-auto whitespace-nowrap px-4 scrollbar-none snap-x">
+        
+        {/* Filters toggle */}
+        <button
+          onClick={() => setActiveSubPanel(prev => prev === 'filters' ? 'none' : 'filters')}
+          className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+            activeSubPanel === 'filters' ? 'bg-brand shadow-lg scale-110' : 'hover:bg-white/10'
+          }`}
+          title="Filtros Profesionales"
+        >
+          <Zap className="w-6 h-6 text-white" />
+        </button>
+
+        {/* Adjustments toggle */}
+        <button
+          onClick={() => setActiveSubPanel(prev => prev === 'adjusts' ? 'none' : 'adjusts')}
+          className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+            activeSubPanel === 'adjusts' ? 'bg-brand shadow-lg scale-110' : 'hover:bg-white/10'
+          }`}
+          title="Ajustes de imagen (Brillo, Contraste, Saturación)"
+        >
+          <SlidersHorizontal className="w-6 h-6 text-white" />
+        </button>
+
+        {/* Rotation action */}
+        <button
+          onClick={handleRotation}
+          className="flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer hover:bg-white/10"
+          title="Rotar 90 grados"
+        >
+          <RotateCw className="w-6 h-6 text-white" />
+        </button>
+
+        {/* Text addition */}
+        <button
+          onClick={() => setActiveSubPanel(prev => prev === 'text' ? 'none' : 'text')}
+          className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+            activeSubPanel === 'text' ? 'bg-brand shadow-lg scale-110' : 'hover:bg-white/10'
+          }`}
+          title="Añadir Texto"
+        >
+          <Type className="w-6 h-6 text-white" />
+        </button>
+
+        {/* Trimmer toggle if video */}
+        {isVideo && (
+          <button
+            onClick={() => setActiveSubPanel(prev => prev === 'trim' ? 'none' : 'trim')}
+            className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+              activeSubPanel === 'trim' ? 'bg-brand shadow-lg scale-110' : 'hover:bg-white/10'
+            }`}
+            title="Sincronizador / Recortador"
+          >
+            <Scissors className="w-6 h-6 text-white" />
+          </button>
+        )}
+
+        {/* Audio layering track toggler */}
+        {isVideo && (
+          <button
+            onClick={() => setActiveSubPanel(prev => prev === 'audio' ? 'none' : 'audio')}
+            className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+              activeSubPanel === 'audio' ? 'bg-brand shadow-lg scale-110' : 'hover:bg-white/10'
+            }`}
+            title="Mezclar capas de Audio"
+          >
+            <Volume2 className="w-6 h-6 text-white" />
+          </button>
+        )}
+
+        {/* Effects & transitions helper */}
+        {isVideo && (
+          <button
+            onClick={() => setActiveSubPanel(prev => prev === 'transitions' ? 'none' : 'transitions')}
+            className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+              activeSubPanel === 'transitions' ? 'bg-brand shadow-lg scale-110' : 'hover:bg-white/10'
+            }`}
+            title="Transiciones y efectos"
+          >
+            <Layers className="w-6 h-6 text-white" />
+          </button>
+        )}
+
+        {/* Separator */}
+        <div className="w-px h-6 bg-white/20 flex-shrink-0 snap-center min-w-[8px]" />
+
+        {/* AI Enhancement */}
+        {!isVideo && (
+          <button
+            onClick={() => setActiveSubPanel(prev => prev === 'ai' ? 'none' : 'ai')}
+            className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+              activeSubPanel === 'ai' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 shadow-lg scale-110' : 'hover:bg-white/10'
+            }`}
+            title="IA Generativa (Mejora, Fondo, Expandir)"
+          >
+            <Sparkles className="w-6 h-6 text-white" />
+          </button>
+        )}
+
+        {/* AR Stickers */}
+        <button
+          onClick={() => setActiveSubPanel(prev => prev === 'stickers' ? 'none' : 'stickers')}
+          className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+            activeSubPanel === 'stickers' ? 'bg-pink-500 shadow-lg scale-110' : 'hover:bg-white/10'
+          }`}
+          title="Pegatinas AR / Stickers"
+        >
+          <Smile className="w-6 h-6 text-white" />
+        </button>
+
+        {/* Collage */}
+        {!isVideo && (
+          <button
+            onClick={() => setActiveSubPanel(prev => prev === 'collage' ? 'none' : 'collage')}
+            className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+              activeSubPanel === 'collage' ? 'bg-cyan-500 shadow-lg scale-110' : 'hover:bg-white/10'
+            }`}
+            title="Collage Inteligente"
+          >
+            <Layout className="w-6 h-6 text-white" />
+          </button>
+        )}
+
+        {/* Kinetic Text Animation */}
+        <button
+          onClick={() => setActiveSubPanel(prev => prev === 'kinetic' ? 'none' : 'kinetic')}
+          className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+            activeSubPanel === 'kinetic' ? 'bg-violet-500 shadow-lg scale-110' : 'hover:bg-white/10'
+          }`}
+          title="Animación Cinética de Texto"
+        >
+          <Eye className="w-6 h-6 text-white" />
+        </button>
+
+        {/* Transform: Speed / Zoom / Pan */}
+        <button
+          onClick={() => setActiveSubPanel(prev => prev === 'transform' ? 'none' : 'transform')}
+          className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+            activeSubPanel === 'transform' ? 'bg-cyan-500 shadow-lg scale-110' : 'hover:bg-white/10'
+          }`}
+          title="Velocidad / Zoom / Ken Burns"
+        >
+          <Expand className="w-6 h-6 text-white" />
+        </button>
+
+        {/* Separator */}
+        <div className="w-px h-6 bg-white/20 flex-shrink-0 snap-center min-w-[8px]" />
+
+        {/* Export Resolution */}
+        <button
+          onClick={() => setActiveSubPanel(prev => prev === 'export' ? 'none' : 'export')}
+          className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+            activeSubPanel === 'export' ? 'bg-emerald-500 shadow-lg scale-110' : 'hover:bg-white/10'
+          }`}
+          title="Exportar resolución profesional"
+        >
+          <Monitor className="w-6 h-6 text-white" />
+        </button>
+
+      </div>
+    </div>
+  );
 
   // ===== PREVIEW MODE =====
   if (isPreview) {
@@ -976,7 +1311,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
 
   // ===== EDITOR MODE =====
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 backdrop-blur-md p-4 overflow-hidden select-none">
+    <div className="fixed inset-0 z-50 h-[100dvh] w-full bg-black overflow-hidden select-none flex flex-col">
       
       {/* Style block for transitions & kinetic animations */}
       <style dangerouslySetInnerHTML={{__html: `
@@ -1009,49 +1344,48 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
         }
       `}} />
 
-      {/* Absolute header buttons */}
+      {/* Top bar: X (left) + Check (right) only — no crowding on mobile */}
       <motion.button
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.9 }}
         onClick={() => { setActiveSubPanel('none'); onClose(); }}
-        className="absolute left-6 top-6 z-50 bg-white/10 hover:bg-white/20 active:scale-95 text-white p-3.5 rounded-full backdrop-blur-md cursor-pointer transition-all border border-white/5"
+        className="absolute left-4 top-4 z-50 bg-black/40 backdrop-blur-sm text-white p-2.5 rounded-full cursor-pointer transition-all border border-white/10 hover:bg-white/20 active:scale-95"
         title="Descartar y Cerrar"
       >
-        <X className="w-5 h-5" />
+        <X className="w-4 h-4" />
       </motion.button>
 
-      <div className="absolute right-6 top-6 z-50 flex items-center gap-3">
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.9 }}
+        onClick={handleApplyChanges}
+        className="absolute right-4 top-4 z-50 bg-brand text-white p-2.5 rounded-full shadow-lg shadow-brand/40 cursor-pointer transition-all hover:brightness-110 active:scale-95"
+        title="Aplicar cambios y compartir"
+      >
+        <Check className="w-4 h-4" />
+      </motion.button>
+
+      {/* Floating right sidebar: Auto-Mejora + Preview Eye */}
+      <div className="absolute right-4 top-20 z-50 flex flex-col gap-3">
         <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.92 }}
+          whileTap={{ scale: 0.9 }}
           onClick={handleAutoEnhance}
-          className={`px-4 py-2.5 rounded-full text-[11px] font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-lg ${
-            isAutoEnhanced 
-              ? 'bg-emerald-500 text-white shadow-emerald-500/20' 
-              : 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white hover:from-violet-500 hover:to-indigo-500 shadow-indigo-600/30'
+          className={`p-2.5 rounded-full backdrop-blur-sm border transition-all cursor-pointer shadow-lg ${
+            isAutoEnhanced
+              ? 'bg-emerald-500/80 border-emerald-400/50 text-white'
+              : 'bg-black/40 border-white/10 text-white/80 hover:bg-white/20'
           }`}
           title="Auto-Mejora Inteligente"
         >
-          <Wand2 className={`w-3.5 h-3.5 ${isAutoEnhanced ? 'animate-bounce' : 'animate-pulse'}`} />
-          <span>{isAutoEnhanced ? '¡Mejorado!' : 'Auto-Mejora'}</span>
+          <Wand2 className={`w-4 h-4 ${isAutoEnhanced ? 'animate-bounce' : ''}`} />
         </motion.button>
         <motion.button
-          whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.9 }}
           onClick={() => setIsPreview(true)}
-          className="bg-white/10 hover:bg-white/20 active:scale-95 text-white p-3 rounded-full backdrop-blur-md cursor-pointer transition-all border border-white/10 shadow-lg"
-          title="Vista previa de todos los cambios"
+          className="bg-black/40 backdrop-blur-sm border border-white/10 text-white/80 hover:bg-white/20 p-2.5 rounded-full cursor-pointer transition-all shadow-lg"
+          title="Vista previa"
         >
-          <Eye className="w-5 h-5" />
-        </motion.button>
-        <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.9 }}
-          onClick={handleApplyChanges}
-          className="bg-brand hover:bg-brand-dark active:scale-95 text-white p-3.5 rounded-full shadow-lg shadow-brand/40 cursor-pointer transition-all flex items-center justify-center"
-          title="Aplicar cambios y compartir"
-        >
-          <Check className="w-5 h-5" />
+          <Eye className="w-4 h-4" />
         </motion.button>
       </div>
 
@@ -1059,27 +1393,16 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="w-full max-w-4xl h-[85vh] flex flex-col justify-between items-center relative"
+        className="flex-1 w-full flex flex-col relative"
         id="immersive-pro-media-editor"
       >
         {/* Central Visual Canvas Area */}
-        <div className="flex-1 w-full flex items-center justify-center p-4 relative overflow-hidden group">
+        <div className="flex-1 w-full flex items-center justify-center relative overflow-hidden group">
           {contentBlock}
-          
-          {/* Minimal input overlay for captioning bottom */}
-          <div className="absolute bottom-1 right-1/2 translate-x-1/2 w-full max-w-sm px-4">
-            <input 
-              type="text"
-              placeholder="Escribe un comentario o pie de foto..."
-              value={caption}
-              onChange={(e) => setCaption(e.target.value)}
-              className="w-full bg-black/75 backdrop-blur-md border border-white/15 rounded-2xl p-2.5 px-4 text-xs text-white placeholder-white/40 focus:outline-none focus:border-brand text-center"
-            />
-          </div>
         </div>
 
         {/* Floating Contextual Panel above lower toolbar */}
-          <div className="w-full max-w-lg mb-4 min-h-[5rem] relative flex items-center justify-center z-40 px-3">
+          <div className="w-full min-h-[5rem] relative flex items-center justify-center z-40 px-3">
             <AnimatePresence mode="wait">
               
               {/* 1. FILTERS (Zap) */}
@@ -1561,7 +1884,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                       className="text-[10px] font-bold px-3 py-1.5 bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/20 text-cyan-200 rounded-lg flex items-center gap-1.5 cursor-pointer"
                     >
                       <Image className="w-3 h-3" />
-                      <span>Añadir imágenes ({collageImages.length}/{getCollageMaxImages() - 1})</span>
+                      <span>Añadir imágenes ({collageImages.length}/{getCollageMaxImages()})</span>
                     </label>
                   </div>
                   {collageImages.length > 0 && (
@@ -1752,177 +2075,15 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
             </AnimatePresence>
           </div>
 
-          {/* Core Floating Bottom Control Deck */}
-          <div className="mb-4 bg-white/10 backdrop-blur-md p-4 rounded-3xl border border-white/10 flex gap-6 items-center shadow-2xl">
-            
-            {/* Filters toggle */}
-            <button
-              onClick={() => setActiveSubPanel(prev => prev === 'filters' ? 'none' : 'filters')}
-              className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                activeSubPanel === 'filters' ? 'bg-brand text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-              }`}
-              title="Filtros Profesionales"
-            >
-              <Zap className="w-5 h-5" />
-            </button>
-
-            {/* Adjustments toggle (brightness/contrast/saturation granular sliders) */}
-            <button
-              onClick={() => setActiveSubPanel(prev => prev === 'adjusts' ? 'none' : 'adjusts')}
-              className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                activeSubPanel === 'adjusts' ? 'bg-brand text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-              }`}
-              title="Ajustes de imagen (Brillo, Contraste, Saturación)"
-            >
-              <SlidersHorizontal className="w-5 h-5" />
-            </button>
-
-            {/* Rotation action */}
-            <button
-              onClick={handleRotation}
-              className="p-2.5 rounded-full text-white/60 hover:text-white hover:bg-white/5 cursor-pointer transition-all active:scale-95"
-              title="Rotar 90 grados"
-            >
-              <RotateCw className="w-5 h-5" />
-            </button>
-
-            {/* Text addition */}
-            <button
-              onClick={() => setActiveSubPanel(prev => prev === 'text' ? 'none' : 'text')}
-              className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                activeSubPanel === 'text' ? 'bg-brand text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-              }`}
-              title="Añadir Texto"
-            >
-              <Type className="w-5 h-5" />
-            </button>
-
-            {/* Trimmer toggle if video */}
-            {isVideo && (
-              <button
-                onClick={() => setActiveSubPanel(prev => prev === 'trim' ? 'none' : 'trim')}
-                className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                  activeSubPanel === 'trim' ? 'bg-brand text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-                }`}
-                title="Sincronizador / Recortador"
-              >
-                <Scissors className="w-5 h-5" />
-              </button>
-            )}
-
-            {/* Audio layering track toggler */}
-            {(isVideo) && (
-              <button
-                onClick={() => setActiveSubPanel(prev => prev === 'audio' ? 'none' : 'audio')}
-                className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                  activeSubPanel === 'audio' ? 'bg-brand text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-                }`}
-                title="Mezclar capas de Audio"
-              >
-                <Volume2 className="w-5 h-5" />
-              </button>
-            )}
-
-            {/* Effects & transitions helper */}
-            {isVideo && (
-              <button
-                onClick={() => setActiveSubPanel(prev => prev === 'transitions' ? 'none' : 'transitions')}
-                className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                  activeSubPanel === 'transitions' ? 'bg-brand text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-                }`}
-                title="Transiciones y efectos"
-              >
-                <Layers className="w-5 h-5" />
-              </button>
-            )}
-
-            {/* ——— SEPARATOR ——— */}
-            <div className="w-px h-6 bg-white/10" />
-
-            {/* AI Enhancement */}
-            {!isVideo && (
-              <button
-                onClick={() => setActiveSubPanel(prev => prev === 'ai' ? 'none' : 'ai')}
-                className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                  activeSubPanel === 'ai' ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-                }`}
-                title="IA Generativa (Mejora, Fondo, Expandir)"
-              >
-                <Sparkles className="w-5 h-5" />
-              </button>
-            )}
-
-            {/* AR Stickers */}
-            <button
-              onClick={() => setActiveSubPanel(prev => prev === 'stickers' ? 'none' : 'stickers')}
-              className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                activeSubPanel === 'stickers' ? 'bg-pink-500 text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-              }`}
-              title="Pegatinas AR / Stickers"
-            >
-              <Smile className="w-5 h-5" />
-            </button>
-
-            {/* Collage */}
-            {!isVideo && (
-              <button
-                onClick={() => setActiveSubPanel(prev => prev === 'collage' ? 'none' : 'collage')}
-                className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                  activeSubPanel === 'collage' ? 'bg-cyan-500 text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-                }`}
-                title="Collage Inteligente"
-              >
-                <Layout className="w-5 h-5" />
-              </button>
-            )}
-
-            {/* Slideshow — Crear Video con Imágenes */}
-            {/* Kinetic Text Animation */}
-            <button
-              onClick={() => setActiveSubPanel(prev => prev === 'kinetic' ? 'none' : 'kinetic')}
-              className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                activeSubPanel === 'kinetic' ? 'bg-violet-500 text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-              }`}
-              title="Animación Cinética de Texto"
-            >
-              <Eye className="w-5 h-5" />
-            </button>
-
-            {/* Transform: Speed / Zoom / Pan */}
-            <button
-              onClick={() => setActiveSubPanel(prev => prev === 'transform' ? 'none' : 'transform')}
-              className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                activeSubPanel === 'transform' ? 'bg-cyan-500 text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-              }`}
-              title="Velocidad / Zoom / Ken Burns"
-            >
-              <Expand className="w-5 h-5" />
-            </button>
-
-            {/* Separator */}
-            <div className="w-px h-6 bg-white/10" />
-
-            {/* Export Resolution */}
-            <button
-              onClick={() => setActiveSubPanel(prev => prev === 'export' ? 'none' : 'export')}
-              className={`p-2.5 rounded-full cursor-pointer transition-all ${
-                activeSubPanel === 'export' ? 'bg-emerald-500 text-white scale-110 shadow-lg' : 'text-white/60 hover:text-white hover:bg-white/5'
-              }`}
-              title="Exportar resolución profesional"
-            >
-              <Monitor className="w-5 h-5" />
-            </button>
-
-          </div>
-
         </motion.div>
+
+          {renderBottomBar()}
+
       </div>
     );
   };
 
 // ─── Inline Music Picker (inside editor) ──────────────────────────
-import { getMusicLibrary, getMusicCategories, MusicTrack } from '../services/stickerService';
-
 const MusicPickerInline: React.FC<{ onSelect: (track: MusicTrack) => void }> = ({ onSelect }) => {
   const [tracks, setTracks] = useState<MusicTrack[]>([]);
   const [categories, setCategories] = useState<string[]>([]);

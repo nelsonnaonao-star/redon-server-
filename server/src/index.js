@@ -1,21 +1,15 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { createServer } from 'http';
-import { Server } from 'socket.io';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { initDb, getOne, getAll, run } from './db.js';
+import { initDb } from './db.js';
 import authRoutes from './routes/auth.js';
-import chatsRoutes from './routes/chats.js';
-import messagesRoutes from './routes/messages.js';
-import contactsRoutes from './routes/contacts.js';
-import profileRoutes from './routes/profile.js';
-import businessesRoutes from './routes/businesses.js';
-import mediaRoutes from './routes/media.js';
-console.log('✅ [INDEX] mediaRoutes importado');
-import { setupSocket, sendToUser } from './socket/index.js';
+import fcmRoutes from './routes/fcm.js';
+import turnRoutes from './routes/turn.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,72 +17,76 @@ async function main() {
   await initDb();
   console.log('Base de datos inicializada');
 
-  // Seed demo user
-  const demoUser = getOne('SELECT id FROM users WHERE username = ?', ['demo']);
-  if (!demoUser) {
-    const bcrypt = (await import('bcryptjs')).default;
-    const { v4: uuidv4 } = await import('uuid');
-    const hash = bcrypt.hashSync('1234', 10);
-    run('INSERT INTO users (id, name, username, phone, password_hash) VALUES (?, ?, ?, ?, ?)',
-      [uuidv4(), 'Usuario Demo', 'demo', '+58 412 000 0000', hash]);
-    console.log('Usuario demo creado (demo / 1234)');
+  const app = express();
+
+  const staticOrigins = [
+    'http://localhost:5173',
+    'http://localhost:5000',
+    'http://localhost:3000',
+    'capacitor://localhost',
+    'file://',
+    'https://redon-server.onrender.com',
+    'https://redon-app.onrender.com',
+    process.env.CORS_ORIGIN || '',
+  ].filter(Boolean);
+
+  const clientOrigin = process.env.CLIENT_ORIGIN || '';
+  if (clientOrigin && !staticOrigins.includes(clientOrigin)) {
+    staticOrigins.push(clientOrigin);
   }
 
-  const app = express();
-  const httpServer = createServer(app);
-  const io = new Server(httpServer, {
-    cors: { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'] }
-  });
-
   app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:5000', 'https://redon-server.onrender.com', 'https://redon-app.onrender.com'],
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (staticOrigins.includes(origin)) return callback(null, true);
+      if (clientOrigin && origin.endsWith(new URL(clientOrigin).hostname)) return callback(null, true);
+      callback(null, true);
+    },
     credentials: true,
   }));
-  console.log('✅ [INDEX] CORS configurado');
+  console.log('CORS configurado dinámicamente');
+
+  // ─── HTTP Security Headers (Helmet) ──────────────────────────────
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: false,
+  }));
+  console.log('Helmet configurado');
+
+  // ─── Global Rate Limiter ─────────────────────────────────────────
+  const globalLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,       // 5 minutes
+    max: 100,                        // max 100 requests per window per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.' },
+  });
+  app.use('/api/', globalLimiter);
+  console.log('Rate limiter global configurado (100 req / 5 min)');
+
+  // ─── Strict SMS Rate Limiter ─────────────────────────────────────
+  const smsLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,       // 15 minutes
+    max: 3,                          // max 3 SMS code requests per window per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Has solicitado demasiados códigos. Espera 15 minutos.' },
+  });
+  app.use('/api/auth/send-reset-code', smsLimiter);
+  console.log('SMS rate limiter configurado (3 req / 15 min)');
+
   app.use(express.json({ limit: '10mb' }));
   app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
   // API routes
   app.use('/api/auth', authRoutes);
-  app.use('/api/chats', chatsRoutes);
-  app.use('/api/messages', messagesRoutes);
-  app.use('/api/contacts', contactsRoutes);
-  app.use('/api/profile', profileRoutes);
-  app.use('/api/businesses', businessesRoutes);
-  app.use('/api/v1/media', mediaRoutes);
-  console.log('✅ [INDEX] Rutas /api/v1/media montadas');
+  app.use('/api/fcm', fcmRoutes);
+  app.use('/api/turn', turnRoutes);
 
-  // WebSocket hook para mensajes via HTTP response
-  app.use((req, res, next) => {
-    const originalJson = res.json.bind(res);
-    res.json = function (body) {
-      if (req.path === '/api/messages/send' && req.method === 'POST' && res.statusCode === 201) {
-        const { otherUsers, message, chatId } = body;
-        if (otherUsers) {
-          otherUsers.forEach(uid => {
-            sendToUser(uid, 'chat:message', { ...message, sender: 'them', chatId: chatId || req.body.chatId });
-          });
-        }
-      }
-      if (req.path === '/api/messages/direct' && req.method === 'POST' && res.statusCode === 201) {
-        const { otherUsers, message, chatId } = body;
-        if (otherUsers) {
-          otherUsers.forEach(uid => {
-            sendToUser(uid, 'chat:new', { message: { ...message, sender: 'them' }, chatId });
-          });
-        }
-      }
-      return originalJson(body);
-    };
-    next();
-  });
-
-  const PORT = process.env.PORT || 5000;
-  httpServer.listen(PORT, () => {
+  const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
+  app.listen(PORT, () => {
     console.log(`RED ON Server corriendo en puerto ${PORT}`);
   });
-
-  setupSocket(io);
 }
 
 main().catch(err => {

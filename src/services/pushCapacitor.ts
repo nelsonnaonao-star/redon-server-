@@ -1,14 +1,37 @@
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { api } from './api';
 
-let registrationComplete = false;
+const isNative = Capacitor.isNativePlatform();
+
+function getServerUrl(): string | null {
+  return import.meta.env.VITE_SERVER_URL || null;
+}
 
 export async function setupCapacitorPush(userId: string) {
-  if (!Capacitor.isNativePlatform()) return;
-  if (registrationComplete) return;
+  if (!isNative) return;
 
   try {
+    try {
+      await PushNotifications.createChannel({
+        id: 'redon-messages',
+        name: 'Mensajes',
+        importance: 5,
+        visibility: 1,
+        sound: 'default',
+        vibration: true,
+        lights: true,
+      });
+      await PushNotifications.createChannel({
+        id: 'redon-calls',
+        name: 'Llamadas',
+        importance: 5,
+        visibility: 1,
+        sound: 'ringtone',
+        vibration: true,
+        lights: true,
+      });
+    } catch {}
+
     const permStatus = await PushNotifications.requestPermissions();
     if (permStatus.receive !== 'granted') return;
 
@@ -16,47 +39,52 @@ export async function setupCapacitorPush(userId: string) {
 
     PushNotifications.addListener('registration', (token: any) => {
       const pushToken = token.value;
-      // Save token to our server
-      const servers = [
-        `http://${localStorage.getItem('redon_server_ip') || 'localhost'}:3001`,
-        'https://disciplined-quietude-production-7b38.up.railway.app',
-      ];
-      for (const url of servers) {
-        fetch(`${url}/api/fcm/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ profile_id: userId, token: pushToken, device: 'android-fcm' }),
-        }).catch(() => {});
-      }
-      registrationComplete = true;
+      const baseUrl = getServerUrl();
+      if (!baseUrl) return;
+      fetch(`${baseUrl}/api/fcm/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_id: userId, token: pushToken, device: 'android-fcm' }),
+      }).catch(() => {});
     });
 
     PushNotifications.addListener('registrationError', () => {});
 
     PushNotifications.addListener('pushNotificationReceived', (notification: any) => {
-      // Notification is already shown by the system, but we can handle data
       const data = notification.data;
       if (data?.type === 'call' && data?.chatId) {
-        // For calls, we might need to navigate to the call screen
         window.dispatchEvent(new CustomEvent('incoming-call', {
-          detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName },
+          detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName, callType: data.callType || 'audio' },
         }));
       }
     });
-  } catch {}
+
+    PushNotifications.addListener('pushNotificationActionPerformed', (action: any) => {
+      const data = action.notification.data;
+      if (!data) return;
+      if (data.type === 'call' && data.chatId) {
+        window.dispatchEvent(new CustomEvent('incoming-call', {
+          detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName || 'Llamada entrante', callType: data.callType || 'audio' },
+        }));
+      } else if (data.chatId) {
+        if (data.contactId) {
+          window.dispatchEvent(new CustomEvent('open-chat', {
+            detail: { chatId: data.chatId, contactId: data.contactId },
+          }));
+        }
+      }
+    });
+  } catch (e) {
+    console.warn('FCM setup failed:', e);
+  }
 }
 
 export async function sendFcmPush(profileId: string, title: string, body: string, data?: Record<string, string>) {
-  const payload = { profile_id: profileId, title, body, data };
-  const servers = [
-    `http://${localStorage.getItem('redon_server_ip') || 'localhost'}:3001`,
-    'https://disciplined-quietude-production-7b38.up.railway.app',
-  ];
-  for (const url of servers) {
-    fetch(`${url}/api/fcm/send`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).catch(() => {});
-  }
+  const baseUrl = getServerUrl();
+  if (!baseUrl) return;
+  fetch(`${baseUrl}/api/fcm/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: profileId, title, body, data }),
+  }).catch(() => {});
 }

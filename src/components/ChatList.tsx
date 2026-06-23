@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef } from 'react';
 import { Chat } from '../types';
 import { 
   MessageSquare, 
@@ -11,20 +11,68 @@ import {
   X
 } from 'lucide-react';
 import ContactSelector from './ContactSelector';
+import { ChatListSkeleton } from './Skeleton';
 import { api } from '../services/api';
 
 interface ChatListProps {
   chats: Chat[];
+  isLoading?: boolean;
   onSelectChat: (chatId: string) => void;
   onAddChat: (newChat: Chat) => void;
   onDeleteChat?: (chatId: string) => void;
 }
 
-export default function ChatList({ chats, onSelectChat, onAddChat, onDeleteChat }: ChatListProps) {
+function getInitials(name: string) {
+  return name
+    .split(' ')
+    .map(part => part[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+}
+
+function AvatarDisplay({ avatarUrl, name, isOnline }: { avatarUrl: string | null; name: string; isOnline: boolean; }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImg = avatarUrl && !imgFailed;
+  return (
+    <div className="w-12 h-12 rounded-2xl flex-shrink-0 relative overflow-hidden bg-amber-100 dark:bg-slate-700 flex items-center justify-center font-semibold text-amber-800 dark:text-slate-200 text-sm shadow-sm">
+      {showImg ? (
+        <img
+          src={avatarUrl!}
+          alt={name}
+          className="w-full h-full object-cover rounded-2xl"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <span className="leading-none">{getInitials(name)}</span>
+      )}
+      {isOnline && (
+        <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-white dark:border-slate-900 rounded-full" />
+      )}
+    </div>
+  );
+}
+
+export default function ChatList({ chats, isLoading, onSelectChat, onAddChat, onDeleteChat }: ChatListProps) {
   const [isContactSelectorOpen, setIsContactSelectorOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ chatId: string; x: number; y: number } | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchMoved = useRef(false);
+
+  // Formatea ISO string → "7:42 p. m." (hoy) o "17/6/26" (días anteriores)
+  const formatChatTime = (t: string): string => {
+    if (!t) return '';
+    const d = new Date(t);
+    if (isNaN(d.getTime())) return t;
+    const now = new Date();
+    const isToday = d.getDate() === now.getDate() &&
+      d.getMonth() === now.getMonth() &&
+      d.getFullYear() === now.getFullYear();
+    if (isToday) {
+      return d.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' });
+    }
+    return d.toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  };
 
   const handleAddNewContact = async (newContact: { name: string; username: string; phone: string; bio: string; userId?: string }) => {
     const getRandomTailwindBgColor = () => {
@@ -43,19 +91,18 @@ export default function ChatList({ chats, onSelectChat, onAddChat, onDeleteChat 
 
     let chatId = String(Date.now());
 
-    // If the contact has a RED ON user ID, create the chat on the server
+    // If the contact has a RED ON user ID, create the chat silently on the server
     if (newContact.userId) {
       try {
-        const res = await api.sendDirectMessage(newContact.userId, '¡Hola! 👋');
+        const res = await api.createChat(newContact.userId);
         chatId = res.chatId;
-        // Reload chats from server to get updated list
         const serverChats = await api.getChats();
         onAddChat(serverChats.find((c: Chat) => c.id === chatId) || {
           id: chatId,
           name: newContact.name,
           avatar: "",
           avatarColor: getRandomTailwindBgColor(),
-          lastMessage: 'Sin mensajes aún',
+          lastMessage: '',
           time: 'Ahora',
           unreadCount: 0,
           isOnline: false,
@@ -65,9 +112,10 @@ export default function ChatList({ chats, onSelectChat, onAddChat, onDeleteChat 
           messages: []
         });
         setIsContactSelectorOpen(false);
+        onSelectChat(chatId);
         return;
-      } catch {
-        // Fallback: create local chat
+      } catch (e) {
+        console.warn('createChat fallback:', e);
       }
     }
 
@@ -88,15 +136,7 @@ export default function ChatList({ chats, onSelectChat, onAddChat, onDeleteChat 
 
     onAddChat(newChat);
     setIsContactSelectorOpen(false);
-  };
-
-  const getInitials = (name: string) => {
-    return name
-      .split(' ')
-      .map(part => part[0])
-      .slice(0, 2)
-      .join('')
-      .toUpperCase();
+    onSelectChat(chatId);
   };
 
   return (
@@ -106,16 +146,18 @@ export default function ChatList({ chats, onSelectChat, onAddChat, onDeleteChat 
 
       {/* Main chat list - Continuous white block bg-white */}
       <div className="flex-1 w-full bg-white dark:bg-slate-900 border-none sm:border dark:sm:border-slate-800/80 max-w-md mx-auto shadow-[0_1px_2px_rgba(0,0,0,0.02)] sm:rounded-2xl overflow-y-auto pb-24 transition-colors duration-300">
-        {chats.length === 0 ? (
+        {isLoading ? (
+          <ChatListSkeleton />
+        ) : chats.length === 0 ? (
           <div className="p-12 text-center text-slate-400 dark:text-slate-500 flex flex-col items-center justify-center">
-            <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center text-slate-305 dark:text-slate-650 mb-4 animate-fade-in">
+            <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4">
               <MessageSquare className="w-8 h-8" />
             </div>
             <p className="text-sm font-medium">Ninguna conversación activa</p>
             <p className="text-xs text-slate-400/85 dark:text-slate-500 mt-2">Empieza tocando el botón flotante inferior para elegir un contacto.</p>
           </div>
         ) : (
-          <div className="divide-y divide-slate-100 dark:divide-slate-800/60">
+          <div>
             {chats.map((chat) => (
               <div 
                 key={chat.id}
@@ -135,52 +177,39 @@ export default function ChatList({ chats, onSelectChat, onAddChat, onDeleteChat 
                   if (longPressTimer.current) clearTimeout(longPressTimer.current);
                   if (!touchMoved.current && !contextMenu) onSelectChat(chat.id);
                 }}
-                className="flex items-center px-4 py-3.5 hover:bg-slate-50/80 dark:hover:bg-slate-800/50 cursor-pointer transition-all active:bg-slate-100 dark:active:bg-slate-800 group"
+                className="w-full flex items-center justify-between py-3 px-4 bg-white dark:bg-slate-900 border-b border-gray-100 dark:border-slate-800/60 hover:bg-gray-50/80 dark:hover:bg-slate-800/40 transition-all cursor-pointer"
               >
-                {/* Avatar with dynamic online state */}
-                <div className="relative flex-shrink-0">
-                  {chat.avatar ? (
-                    <img 
-                      src={chat.avatar} 
-                      alt={chat.name} 
-                      className="w-12 h-12 rounded-full object-cover border border-slate-100 dark:border-slate-800 shadow-[0_1px_3px_rgba(0,0,0,0.04)]"
-                    />
-                  ) : (
-                    <div className={`w-12 h-12 rounded-full ${chat.avatarColor || 'bg-slate-450'} text-white font-bold text-sm tracking-wide flex items-center justify-center border border-white dark:border-slate-850 shadow-[0_1px_3px_rgba(0,0,0,0.04)]`}>
-                      {getInitials(chat.name)}
-                    </div>
-                  )}
-                  {chat.isOnline && (
-                    <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white dark:border-slate-900 rounded-full animate-pulse" title="En línea" />
-                  )}
+                {/* COL 1: Avatar (fixed width) */}
+                <AvatarDisplay
+                  avatarUrl={chat.avatar || null}
+                  name={chat.name}
+                  isOnline={chat.isOnline}
+                />
+
+                {/* COL 2: Name + Message (flex-1, truncates safely) */}
+                <div className="flex-1 min-w-0 ml-3 flex flex-col justify-center">
+                  <div className="text-base font-semibold text-gray-900 dark:text-gray-100 truncate leading-tight">
+                    {chat.name}
+                  </div>
+                  <div className="flex items-center text-sm text-gray-500 dark:text-slate-400 truncate mt-0.5 leading-snug">
+                    {chat.lastMessage}
+                  </div>
                 </div>
 
-                {/* Name, message and state */}
-                <div className="ml-3.5 flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-slate-900 dark:text-slate-100 font-semibold text-sm truncate leading-tight group-hover:text-[#3390ec] transition-colors">
-                      {chat.name}
-                    </h3>
-                    <span className="text-slate-400 dark:text-slate-500 text-xs font-normal ml-2 flex-shrink-0">
-                      {chat.time}
+                {/* COL 3: Time + Status (fixed, never wraps) */}
+                <div className="flex flex-col items-end justify-between h-10 ml-2 flex-shrink-0">
+                  <span className="text-xs text-gray-400 dark:text-slate-500 whitespace-nowrap leading-none">
+                    {formatChatTime(chat.time)}
+                  </span>
+                  {chat.unreadCount > 0 ? (
+                    <span className="w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center text-[10px] text-white font-bold mt-1 leading-none">
+                      {chat.unreadCount}
                     </span>
-                  </div>
-                  <div className="flex items-center justify-between mt-1">
-                    <p className="text-slate-500 dark:text-slate-400 text-xs truncate mr-2 leading-relaxed max-w-[85%]">
-                      {chat.lastMessage}
-                    </p>
-                    
-                    {/* Unread Badge or Double check ticks */}
-                    {chat.unreadCount > 0 ? (
-                      <span className="bg-[#3390ec] text-white text-[10px] font-bold px-1.5 min-w-[18px] h-[18px] rounded-full flex items-center justify-center shadow-sm">
-                        {chat.unreadCount}
-                      </span>
-                    ) : (
-                      <span className="text-[#3390ec] opacity-60">
-                        <CheckCheck className="w-4 h-4" />
-                      </span>
-                    )}
-                  </div>
+                  ) : (
+                    <span className="mt-1 leading-none">
+                      <CheckCheck className="w-4 h-4 text-blue-500" />
+                    </span>
+                  )}
                 </div>
               </div>
             ))}

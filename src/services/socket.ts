@@ -1,8 +1,8 @@
 import { supabase } from '../lib/supabase';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
-type MessageHandler = (data: { chatId: string; sender: string; text: string; time: string; id: string }) => void;
-type NewChatHandler = (data: { message: { id: string; sender: string; text: string; time: string }; chatId: string }) => void;
+type MessageHandler = (data: { chatId: string; sender: string; text: string; time: string; id: string; audioUrl?: string; audioDuration?: number; mimeType?: string }) => void;
+type NewChatHandler = (data: { message: { id: string; sender: string; text: string; time: string; audioUrl?: string; audioDuration?: number; mimeType?: string }; chatId: string }) => void;
 type StatusUpdateHandler = (data: { messageId: string; status: string; chatId: string }) => void;
 
 let messageHandler: MessageHandler | null = null;
@@ -38,12 +38,20 @@ export function connectSocket(uid: string) {
             text: msg.text,
             time: msg.created_at,
             id: msg.id,
+            audioUrl: msg.audio_url || undefined,
+            audioDuration: msg.audio_duration || undefined,
+            mimeType: msg.mime_type || undefined,
           });
         }
 
         if (newChatHandler) {
           newChatHandler({
-            message: { id: msg.id, sender: 'them', text: msg.text, time: msg.created_at },
+            message: {
+              id: msg.id, sender: 'them', text: msg.text, time: msg.created_at,
+              audioUrl: msg.audio_url || undefined,
+              audioDuration: msg.audio_duration || undefined,
+              mimeType: msg.mime_type || undefined,
+            },
             chatId: msg.chat_id,
           });
         }

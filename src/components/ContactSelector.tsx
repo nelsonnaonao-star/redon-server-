@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Chat } from '../types';
-import { Search, X, User, Phone, Text, Info, Plus, ArrowLeft, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Search, X, User, Phone, Text, Info, Plus, ArrowLeft, CheckCircle2, AlertCircle, Users } from 'lucide-react';
 import CountryCodePicker from './CountryCodePicker';
 import { api } from '../services/api';
 
@@ -17,6 +17,8 @@ export default function ContactSelector({
 }: ContactSelectorProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddNewContact, setShowAddNewContact] = useState(false);
+  const [savedContacts, setSavedContacts] = useState<Chat[]>([]);
+  const [loadingContacts, setLoadingContacts] = useState(false);
 
   const [cName, setCName] = useState('');
   const [cCode, setCCode] = useState('+58');
@@ -29,14 +31,37 @@ export default function ContactSelector({
   const [searchingUser, setSearchingUser] = useState(false);
   const [detectedUser, setDetectedUser] = useState<any>(null);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setLoadingContacts(true);
+    api.getContacts().then(list => {
+      setSavedContacts(list);
+    }).catch(() => {}).finally(() => setLoadingContacts(false));
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  const filteredContacts = contacts.filter(c => {
+  const filteredSavedContacts = savedContacts.filter(c => {
+    const term = searchQuery.toLowerCase();
+    return c.name.toLowerCase().includes(term) || c.username.toLowerCase().includes(term) || c.phone.includes(term);
+  });
+
+  const filteredChats = contacts.filter(c => {
     const term = searchQuery.toLowerCase();
     return c.name.toLowerCase().includes(term) || c.username.toLowerCase().includes(term) || c.phone.includes(term);
   });
 
   const getInitials = (name: string) => name.split(' ').map(p => p[0]).slice(0, 2).join('').toUpperCase();
+
+  const handleSelectSavedContact = async (contact: Chat) => {
+    onAddCustomContact({
+      name: contact.name,
+      phone: contact.phone,
+      username: contact.username,
+      bio: contact.bio,
+      userId: contact.id,
+    });
+  };
 
   const handlePhoneChange = async (phone: string) => {
     setCPhone(phone);
@@ -114,7 +139,7 @@ export default function ContactSelector({
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {!showAddNewContact && filteredContacts.length > 0 ? (
+        {!showAddNewContact ? (
           <>
             <div className="max-w-md mx-auto relative select-none">
               <span className="absolute left-4 top-3.5 text-slate-400"><Search className="w-4 h-4" /></span>
@@ -128,39 +153,96 @@ export default function ContactSelector({
               )}
             </div>
             <div className="max-w-md mx-auto space-y-2 pb-16">
-              <div className="flex items-center justify-between pb-1 select-none">
-                <span className="text-[10px] text-slate-450 font-bold uppercase tracking-wider px-1">Contactos ({filteredContacts.length})</span>
-                <button onClick={() => setShowAddNewContact(true)}
-                  className="text-xs font-bold text-[#3390ec] hover:text-[#2b7bc9] flex items-center gap-1 cursor-pointer">
-                  <Plus className="w-3.5 h-3.5" /><span>Añadir por teléfono</span>
-                </button>
-              </div>
-              <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-xs divide-y divide-slate-50">
-                {filteredContacts.map((contact) => (
-                  <div key={contact.id} onClick={() => onSelectContact(contact.id)}
-                    className="px-4 py-3.5 flex items-center gap-3.5 hover:bg-slate-50 cursor-pointer transition-colors group">
-                    <div className="relative flex-shrink-0 select-none">
-                      {contact.avatar ? (
-                        <img src={contact.avatar} alt={contact.name} className="w-11 h-11 rounded-full object-cover border border-slate-50 shadow-xs" />
-                      ) : (
-                        <div className={`w-11 h-11 rounded-full ${contact.avatarColor || 'bg-slate-450'} text-white font-bold text-xs flex items-center justify-center border border-white shadow-xs`}>
-                          {getInitials(contact.name)}
-                        </div>
-                      )}
-                      {contact.isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="text-slate-900 font-bold text-sm tracking-tight leading-tight group-hover:text-[#3390ec] transition-colors truncate">{contact.name}</h4>
-                      <div className="flex items-center gap-2 mt-0.5 select-none">
-                        <span className="text-[10px] text-slate-400 truncate leading-none">{contact.phone}</span>
-                        <span className="w-1 h-1 bg-slate-300 rounded-full" />
-                        <span className={`text-[9px] font-bold tracking-tight uppercase leading-none ${contact.isOnline ? 'text-emerald-500' : 'text-slate-400'}`}>
-                          {contact.isOnline ? 'En línea' : 'Desconectado'}
-                        </span>
-                      </div>
-                    </div>
+              {/* Nuevo Grupo */}
+              <div onClick={() => {}}
+                className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-xs cursor-pointer hover:bg-slate-50 transition-colors">
+                <div className="px-4 py-3.5 flex items-center gap-3.5">
+                  <div className="w-11 h-11 rounded-full bg-emerald-500 text-white flex items-center justify-center">
+                    <Users className="w-5 h-5" />
                   </div>
-                ))}
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-slate-900 font-bold text-sm tracking-tight leading-tight">Nuevo Grupo</h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Crea un grupo con varios contactos</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Contactos guardados */}
+              {filteredSavedContacts.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between pb-1 select-none mt-4">
+                    <span className="text-[10px] text-slate-450 font-bold uppercase tracking-wider px-1">Contactos guardados ({filteredSavedContacts.length})</span>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-xs divide-y divide-slate-50">
+                    {filteredSavedContacts.map((contact) => (
+                      <div key={contact.id} onClick={() => handleSelectSavedContact(contact)}
+                        className="px-4 py-3.5 flex items-center gap-3.5 hover:bg-slate-50 cursor-pointer transition-colors group">
+                        <div className="relative flex-shrink-0 select-none">
+                          {contact.avatar ? (
+                            <img src={contact.avatar} alt={contact.name} className="w-11 h-11 rounded-full object-cover border border-slate-50 shadow-xs" />
+                          ) : (
+                            <div className={`w-11 h-11 rounded-full ${contact.avatarColor || 'bg-slate-450'} text-white font-bold text-xs flex items-center justify-center border border-white shadow-xs`}>
+                              {getInitials(contact.name)}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-slate-900 font-bold text-sm tracking-tight leading-tight group-hover:text-[#3390ec] transition-colors truncate">{contact.name}</h4>
+                          <div className="flex items-center gap-2 mt-0.5 select-none">
+                            <span className="text-[10px] text-slate-400 truncate leading-none">{contact.phone}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Conversaciones recientes */}
+              {filteredChats.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between pb-1 select-none mt-4">
+                    <span className="text-[10px] text-slate-450 font-bold uppercase tracking-wider px-1">Conversaciones recientes ({filteredChats.length})</span>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-xs divide-y divide-slate-50">
+                    {filteredChats.map((chat) => (
+                      <div key={chat.id} onClick={() => onSelectContact(chat.id)}
+                        className="px-4 py-3.5 flex items-center gap-3.5 hover:bg-slate-50 cursor-pointer transition-colors group">
+                        <div className="relative flex-shrink-0 select-none">
+                          {chat.avatar ? (
+                            <img src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover border border-slate-50 shadow-xs" />
+                          ) : (
+                            <div className={`w-11 h-11 rounded-full ${chat.avatarColor || 'bg-slate-450'} text-white font-bold text-xs flex items-center justify-center border border-white shadow-xs`}>
+                              {getInitials(chat.name)}
+                            </div>
+                          )}
+                          {chat.isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-slate-900 font-bold text-sm tracking-tight leading-tight group-hover:text-[#3390ec] transition-colors truncate">{chat.name}</h4>
+                          <div className="flex items-center gap-2 mt-0.5 select-none">
+                            <span className="text-[10px] text-slate-400 truncate leading-none">{chat.lastMessage}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {filteredSavedContacts.length === 0 && filteredChats.length === 0 && !loadingContacts && (
+                <div className="text-center py-12 text-slate-400">
+                  <p className="text-sm font-medium">No hay contactos guardados</p>
+                  <p className="text-xs mt-1">Usa "Añadir por teléfono" para agregar contactos</p>
+                </div>
+              )}
+
+              {/* Añadir por teléfono */}
+              <div className="pt-2">
+                <button onClick={() => setShowAddNewContact(true)}
+                  className="w-full py-3 text-xs font-bold text-white bg-[#3390ec] hover:bg-[#2b7bc9] rounded-xl transition-all cursor-pointer shadow-sm text-center flex items-center justify-center gap-2">
+                  <Plus className="w-4 h-4" /><span>Añadir por teléfono</span>
+                </button>
               </div>
             </div>
           </>

@@ -52,6 +52,29 @@ export default function EmprendedorView({ onStartBusinessChat }: EmprendedorView
   const [bizCategory, setBizCategory] = useState('');
   const [bizContact, setBizContact] = useState('');
 
+  // Real-time metrics (0 until real data arrives)
+  const [profileVisits, setProfileVisits] = useState(0);
+  const [linkClicks, setLinkClicks] = useState(0);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const { supabase } = await import('../lib/supabase');
+        const { count: visits, error: visitsErr } = await supabase
+          .from('profile_visits')
+          .select('*', { count: 'exact', head: true });
+        if (!visitsErr && visits !== null) setProfileVisits(visits);
+        const { count: clicks, error: clicksErr } = await supabase
+          .from('link_clicks')
+          .select('*', { count: 'exact', head: true });
+        if (!clicksErr && clicks !== null) setLinkClicks(clicks);
+      } catch {
+        // tables may not exist yet — stays 0
+      }
+    };
+    fetchStats();
+  }, []);
+
   // Promo Modal state
   const [showPromoModal, setShowPromoModal] = useState(false);
 
@@ -182,10 +205,10 @@ export default function EmprendedorView({ onStartBusinessChat }: EmprendedorView
               </div>
             </div>
             <div className="mt-2.5 flex items-baseline gap-1.5 justify-between">
-              <span className="text-slate-900 dark:text-white text-xl font-bold font-display">1,480</span>
+              <span className="text-slate-900 dark:text-white text-xl font-bold font-display">{profileVisits.toLocaleString()}</span>
               <span className="text-emerald-500 text-[10px] font-bold flex items-center gap-0.5">
                 <TrendingUp className="w-2.5 h-2.5" />
-                +14%
+                +0%
               </span>
             </div>
           </div>
@@ -199,10 +222,10 @@ export default function EmprendedorView({ onStartBusinessChat }: EmprendedorView
               </div>
             </div>
             <div className="mt-2.5 flex items-baseline gap-1.5 justify-between">
-              <span className="text-slate-900 dark:text-white text-xl font-bold font-display">342</span>
+              <span className="text-slate-900 dark:text-white text-xl font-bold font-display">{linkClicks.toLocaleString()}</span>
               <span className="text-emerald-500 text-[10px] font-bold flex items-center gap-0.5">
                 <TrendingUp className="w-2.5 h-2.5" />
-                +8.5%
+                +0%
               </span>
             </div>
           </div>

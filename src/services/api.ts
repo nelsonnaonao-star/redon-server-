@@ -1,6 +1,12 @@
 import { supabase } from '../lib/supabase';
 import type { Chat, Message, UserProfile, Moment, ActiveTab, ChatStyle, BusinessListing } from '../types';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isValidUUID(id: string): boolean {
+  return UUID_REGEX.test(id);
+}
+
 // ─── AUTH (Supabase Auth) ──────────────────────────────────────────
 
 export async function login(identifier: string, password: string) {
@@ -53,9 +59,10 @@ export async function login(identifier: string, password: string) {
   };
 }
 
-export async function register(name: string, phone: string, username: string, password: string) {
+export async function register(name: string, phone: string, username: string, password: string, realEmail?: string) {
   const cleanUsername = username.replace(/^@/, '').toLowerCase().trim();
   const cleanPhone = phone.trim();
+  const cleanEmail = realEmail?.trim().toLowerCase() || '';
 
   const existing = await supabase.from('profiles').select('id').or(`username.eq.${cleanUsername},phone_number.eq.${cleanPhone}`).maybeSingle();
   if (existing.data) throw new Error('El usuario o teléfono ya está registrado');
@@ -75,24 +82,32 @@ export async function register(name: string, phone: string, username: string, pa
     phone_number: cleanPhone,
     avatar_url: '',
     bio: 'Disponible en RED ON',
+    ...(cleanEmail ? { real_email: cleanEmail } : {}),
   });
 
   if (profileError && !profileError.message.includes('duplicate key')) throw new Error(profileError.message);
 
   return {
     token: data.session?.access_token || '',
-    user: { id: data.user.id, name, username: cleanUsername, phone: cleanPhone, avatar: '', bio: 'Disponible en RED ON' },
+    user: { id: data.user.id, name, username: cleanUsername, phone: cleanPhone, avatar: '', bio: 'Disponible en RED ON', realEmail: cleanEmail },
   };
 }
 
 export async function forgot(identifier: string) {
   const input = identifier.toLowerCase().trim().replace(/^@/, '');
-  const { data: profile } = await supabase.from('profiles').select('username').eq('username', input).single();
+  const { data: profile } = await supabase.from('profiles').select('username, real_email').eq('username', input).single();
   if (!profile) throw new Error('Usuario no encontrado');
+  if (!profile.real_email) throw new Error('Este usuario no tiene un correo electrónico registrado. Usa la recuperación por SMS.');
 
-  const { error } = await supabase.auth.resetPasswordForEmail(`${profile.username}@redon.app`);
+  const { error } = await supabase.auth.resetPasswordForEmail(profile.real_email);
   if (error) throw new Error(error.message);
-  return { message: 'Instrucciones enviadas', username: profile.username };
+  return { message: 'Instrucciones enviadas al correo registrado', username: profile.username, maskedEmail: maskEmail(profile.real_email) };
+}
+
+function maskEmail(email: string) {
+  const [name, domain] = email.split('@');
+  if (!domain) return email;
+  return name[0] + '***' + name.slice(-1) + '@' + domain;
 }
 
 // ─── CHATS ─────────────────────────────────────────────────────────
@@ -120,6 +135,38 @@ export async function getChats(): Promise<Chat[]> {
 
   if (!chats) return [];
 
+  // Build map of chat_id → other participant's profile_id
+  const { data: allParticipants } = await supabase
+    .from('chat_participants')
+    .select('chat_id, profile_id')
+    .in('chat_id', chatIds);
+
+  const otherProfileMap: Record<string, string> = {};
+  if (allParticipants) {
+    for (const p of allParticipants) {
+      if (p.chat_id && p.profile_id !== userId) {
+        otherProfileMap[p.chat_id] = p.profile_id;
+      }
+    }
+  }
+
+  // Batch-fetch avatar_url and name for all other participants
+  const otherIds = [...new Set(Object.values(otherProfileMap).filter(Boolean))];
+  let avatarMap: Record<string, string> = {};
+  let nameMap: Record<string, string> = {};
+  if (otherIds.length > 0) {
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, avatar_url, name')
+      .in('id', otherIds);
+    if (profiles) {
+      for (const p of profiles) {
+        avatarMap[p.id] = p.avatar_url || '';
+        nameMap[p.id] = p.name || 'Usuario';
+      }
+    }
+  }
+
   const chatPromises = chats.map(async (chat) => {
     const [lastMsgQuery, unreadQuery] = await Promise.all([
       supabase
@@ -139,11 +186,15 @@ export async function getChats(): Promise<Chat[]> {
     const lastMsg = lastMsgQuery.data?.[0] || null;
     const unread = unreadQuery.count || 0;
 
+    // Resolve avatar and name: prefer the other participant's data over denormalized chat columns
+    const otherId = otherProfileMap[chat.id];
+    const avatarUrl = chat.avatar || (otherId ? avatarMap[otherId] : '') || '';
+
     return {
       id: chat.id,
-      name: chat.name || 'Usuario',
-      avatar: chat.avatar || '',
-      avatarColor: chat.avatar_color || (chat.avatar ? '' : 'bg-slate-450'),
+      name: otherId && nameMap[otherId] ? nameMap[otherId] : (chat.name || 'Usuario'),
+      avatar: avatarUrl,
+      avatarColor: avatarUrl ? '' : (chat.avatar_color || ''),
       lastMessage: lastMsg ? lastMsg.text : (chat.last_message || 'Sin mensajes aún'),
       time: lastMsg ? lastMsg.created_at : chat.created_at,
       unreadCount: unread,
@@ -179,6 +230,9 @@ export async function getMessages(chatId: string): Promise<Message[]> {
     text: m.text,
     time: m.time || m.created_at,
     status: m.status,
+    isEdited: m.is_edited || false,
+    isDeleted: m.is_deleted || false,
+    ...(m.audio_url ? { audioUrl: m.audio_url, audioDuration: m.audio_duration || 0, mimeType: m.mime_type || 'audio/webm' } : {}),
   }));
 }
 
@@ -194,7 +248,7 @@ export async function markRead(chatId: string) {
     .neq('sender_id', userId);
 }
 
-export async function sendMessage(chatId: string, text: string) {
+export async function sendMessage(chatId: string, text: string, audioOptions?: { audioUrl: string; audioDuration: number; mimeType: string }) {
   const { data: user } = await supabase.auth.getUser();
   if (!user?.user) throw new Error('No autenticado');
   const userId = user.user.id;
@@ -217,26 +271,90 @@ export async function sendMessage(chatId: string, text: string) {
       receiver_id: receiverId,
       text,
       status: 'sent',
+      ...(audioOptions ? {
+        audio_url: audioOptions.audioUrl,
+        audio_duration: audioOptions.audioDuration,
+        mime_type: audioOptions.mimeType,
+      } : {}),
     })
     .select()
     .single();
 
   if (error) throw new Error(error.message);
 
-  // Fire push notification to recipient (best-effort, try both servers)
-  if (receiverId) {
-    const senderName = user.user.user_metadata?.name || 'RED ON';
-    const pushBody = JSON.stringify({ profile_id: receiverId, title: senderName, body: text });
-    const pushUrls = [
-      `http://${localStorage.getItem('redon_server_ip') || 'localhost'}:3001/api/fcm/send`,
-      'https://disciplined-quietude-production-7b38.up.railway.app/api/fcm/send',
-    ];
-    for (const url of pushUrls) {
-      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: pushBody }).catch(() => {});
+  return {
+    message: {
+      id: msg.id, sender: 'me', text, time: msg.created_at, status: 'sent',
+      ...(audioOptions ? { audioUrl: audioOptions.audioUrl, audioDuration: audioOptions.audioDuration, mimeType: audioOptions.mimeType } : {}),
+    },
+  };
+}
+
+export async function createChat(contactUserId: string) {
+  const { data: user } = await supabase.auth.getUser();
+  if (!user?.user) throw new Error('No autenticado');
+  const userId = user.user.id;
+
+  const { data: myParts } = await supabase
+    .from('chat_participants')
+    .select('chat_id')
+    .eq('profile_id', userId);
+
+  const myChatIds = (myParts || []).map(p => p.chat_id);
+
+  let existingChatId: string | null = null;
+  if (myChatIds.length > 0) {
+    const { data: otherParts } = await supabase
+      .from('chat_participants')
+      .select('chat_id')
+      .in('chat_id', myChatIds)
+      .eq('profile_id', contactUserId)
+      .limit(1);
+
+    if (otherParts && otherParts.length > 0) {
+      existingChatId = otherParts[0].chat_id;
     }
   }
 
-  return { message: { id: msg.id, sender: 'me', text, time: msg.created_at, status: 'sent' } };
+  if (existingChatId) return { chatId: existingChatId, created: false };
+
+  const chatId = crypto.randomUUID();
+
+  const { data: otherProfile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', contactUserId)
+    .single();
+
+  if (!otherProfile) throw new Error('Contacto no encontrado');
+
+  const { error: chatErr } = await supabase.from('chats').insert({
+    id: chatId,
+    name: otherProfile.name || 'Usuario',
+    avatar: otherProfile.avatar_url || '',
+    avatar_color: otherProfile.avatar_url ? '' : 'bg-slate-450',
+    phone: otherProfile.phone_number || '',
+    username: otherProfile.username || '',
+    bio: otherProfile.bio || '',
+    profile_id: contactUserId,
+    is_online: false,
+    created_at: new Date().toISOString(),
+  });
+  if (chatErr) throw new Error(chatErr.message);
+
+  const { error: p1Err } = await supabase.from('chat_participants').insert({
+    chat_id: chatId,
+    profile_id: userId,
+  });
+  if (p1Err) throw new Error(p1Err.message);
+
+  const { error: p2Err } = await supabase.from('chat_participants').insert({
+    chat_id: chatId,
+    profile_id: contactUserId,
+  });
+  if (p2Err) throw new Error(p2Err.message);
+
+  return { chatId, created: true };
 }
 
 export async function sendDirectMessage(contactUserId: string, text: string) {
@@ -456,16 +574,19 @@ export async function getMoments(): Promise<Moment[]> {
   if (!data) return [];
 
   const ids = data.map(m => m.id);
-  const { data: viewsData } = await supabase
-    .from('momento_views')
-    .select('momento_id, user_id')
-    .in('momento_id', ids);
-
-  const viewMap: Record<string, number> = {};
-  if (viewsData) {
-    for (const v of viewsData) {
-      viewMap[v.momento_id] = (viewMap[v.momento_id] || 0) + 1;
-    }
+  let viewMap: Record<string, number> = {};
+  if (ids.length > 0) {
+    try {
+      const { data: viewsData } = await supabase
+        .from('momento_views')
+        .select('momento_id, user_id')
+        .in('momento_id', ids);
+      if (viewsData) {
+        for (const v of viewsData) {
+          viewMap[v.momento_id] = (viewMap[v.momento_id] || 0) + 1;
+        }
+      }
+    } catch {}
   }
 
   return data.map((m: any) => ({
@@ -473,12 +594,14 @@ export async function getMoments(): Promise<Moment[]> {
     name: m.name || '',
     avatar: m.avatar || '',
     avatarColor: m.avatar_color || undefined,
+    profileId: m.user_id || '',
     time: formatTimeAgo(m.created_at),
     hasUnseen: m.has_unseen ?? true,
     image: m.image || '',
     caption: m.caption || '',
     viewCount: viewMap[m.id] || 0,
     reactions: m.reactions || [],
+    animMeta: m.anim_meta || undefined,
   }));
 }
 
@@ -489,6 +612,7 @@ export async function addMoment(moment: {
   hasUnseen: boolean;
   image: string;
   caption: string;
+  animMeta?: import('../types').MomentAnimMeta;
 }) {
   const { data: user } = await supabase.auth.getUser();
   if (!user?.user) throw new Error('No autenticado');
@@ -505,6 +629,7 @@ export async function addMoment(moment: {
       has_unseen: moment.hasUnseen,
       image: moment.image,
       caption: moment.caption,
+      anim_meta: moment.animMeta || {},
     })
     .select()
     .single();
@@ -514,6 +639,7 @@ export async function addMoment(moment: {
 }
 
 export async function deleteMoment(momentoId: string) {
+  if (!isValidUUID(momentoId)) return;
   const { error } = await supabase.from('momentos').delete().eq('id', momentoId);
   if (error) throw new Error(error.message);
 }
@@ -522,15 +648,39 @@ export async function viewMoment(momentoId: string) {
   const { data: user } = await supabase.auth.getUser();
   if (!user?.user) return;
 
-  await supabase.from('momento_views').insert({
-    momento_id: momentoId,
-    user_id: user.user.id,
-  });
+  // Skip if momentoId is not a valid UUID (e.g. local optimistic ID) — prevents FK violation 400
+  if (!isValidUUID(momentoId)) return;
 
-  await supabase.from('momentos').update({ has_unseen: false }).eq('id', momentoId);
+  // Only insert view if not already viewed
+  const { data: existing } = await supabase
+    .from('momento_views')
+    .select('id')
+    .eq('momento_id', momentoId)
+    .eq('user_id', user.user.id)
+    .maybeSingle();
+
+  if (!existing) {
+    await supabase.from('momento_views').insert({
+      momento_id: momentoId,
+      user_id: user.user.id,
+    });
+  }
+
+  // Only mark has_unseen=false if the viewer owns the momento
+  if (user.user.id) {
+    const { data: momento } = await supabase
+      .from('momentos')
+      .select('user_id')
+      .eq('id', momentoId)
+      .maybeSingle();
+    if (momento && momento.user_id === user.user.id) {
+      await supabase.from('momentos').update({ has_unseen: false }).eq('id', momentoId);
+    }
+  }
 }
 
 export async function getMomentViews(momentoId: string): Promise<number> {
+  if (!isValidUUID(momentoId)) return 0;
   const { data } = await supabase
     .from('momento_views')
     .select('id', { count: 'exact', head: true })
@@ -542,6 +692,7 @@ export async function getMomentViews(momentoId: string): Promise<number> {
 export async function reactToMoment(momentoId: string, emoji: string) {
   const { data: user } = await supabase.auth.getUser();
   if (!user?.user) return;
+  if (!isValidUUID(momentoId)) return;
 
   // Check if already reacted
   const { data: existing } = await supabase
@@ -574,25 +725,30 @@ export async function reactToMoment(momentoId: string, emoji: string) {
 export async function getMomentReactions(momentoId: string) {
   const { data: user } = await supabase.auth.getUser();
   const userId = user?.user?.id;
+  if (!isValidUUID(momentoId)) return { myReaction: null, summary: [] };
 
-  const { data } = await supabase
-    .from('momento_reactions')
-    .select('user_id, emoji, created_at')
-    .eq('momento_id', momentoId);
+  try {
+    const { data } = await supabase
+      .from('momento_reactions')
+      .select('user_id, emoji, created_at')
+      .eq('momento_id', momentoId);
 
-  if (!data) return { myReaction: null, summary: [] };
+    if (!data) return { myReaction: null, summary: [] };
 
-  const myReaction = userId ? data.find(r => r.user_id === userId)?.emoji || null : null;
+    const myReaction = userId ? data.find(r => r.user_id === userId)?.emoji || null : null;
 
-  const counts: Record<string, number> = {};
-  for (const r of data) {
-    counts[r.emoji] = (counts[r.emoji] || 0) + 1;
+    const counts: Record<string, number> = {};
+    for (const r of data) {
+      counts[r.emoji] = (counts[r.emoji] || 0) + 1;
+    }
+
+    return {
+      myReaction,
+      summary: Object.entries(counts).map(([emoji, count]) => ({ emoji, count })),
+    };
+  } catch {
+    return { myReaction: null, summary: [] };
   }
-
-  return {
-    myReaction,
-    summary: Object.entries(counts).map(([emoji, count]) => ({ emoji, count })),
-  };
 }
 
 // ─── PROFILE ───────────────────────────────────────────────────────
@@ -665,10 +821,67 @@ export async function createBusiness(data: {
   return biz;
 }
 
-// ─── SERVER IP (ya no necesario pero mantenemos compatibilidad) ────
+// ─── SMS Password Recovery ───────────────────────────────────────────
 
-export function setServerIp(_ip: string) {
-  localStorage.removeItem('redon_server_ip');
+const SERVER_URL: string | null = import.meta.env.VITE_SERVER_URL || null;
+
+export async function sendResetCode(phone: string) {
+  if (!SERVER_URL) throw new Error('VITE_SERVER_URL no está configurado');
+  const res = await fetch(`${SERVER_URL}/api/auth/send-reset-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Error al enviar código');
+  return data;
+}
+
+export async function verifyResetCode(phone: string, code: string) {
+  if (!SERVER_URL) throw new Error('VITE_SERVER_URL no está configurado');
+  const res = await fetch(`${SERVER_URL}/api/auth/verify-reset-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, code }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Código inválido');
+  return data;
+}
+
+export async function updatePassword(phone: string, code: string, newPassword: string) {
+  if (!SERVER_URL) throw new Error('VITE_SERVER_URL no está configurado');
+  const res = await fetch(`${SERVER_URL}/api/auth/update-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, code, newPassword }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Error al actualizar contraseña');
+  return data;
+}
+
+// ─── MESSAGE EDIT / DELETE ────────────────────────────────────────
+
+export async function editMessage(messageId: string, text: string) {
+  const { data, error } = await supabase
+    .from('messages')
+    .update({ text, is_edited: true })
+    .eq('id', messageId)
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return { message: data };
+}
+
+export async function deleteMessage(messageId: string) {
+  const { error } = await supabase
+    .from('messages')
+    .update({ is_deleted: true })
+    .eq('id', messageId);
+
+  if (error) throw new Error(error.message);
 }
 
 // ─── API object for backward compatibility ─────────────────────────
@@ -681,6 +894,7 @@ export const api = {
   getMessages,
   markRead,
   sendMessage,
+  createChat,
   sendDirectMessage,
   getContacts,
   addContact,
@@ -696,5 +910,9 @@ export const api = {
   updateProfile,
   getBusinesses,
   createBusiness,
-  setServerIp,
+  sendResetCode,
+  verifyResetCode,
+  updatePassword,
+  editMessage,
+  deleteMessage,
 };

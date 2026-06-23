@@ -7,14 +7,14 @@ interface ChatCustomizerProps {
   onChangeStyle: (updated: ChatStyle) => void;
 }
 
-// 5 pre-defined colors + neon gradient
+// 5 pre-defined colors + neon gradient — each preset defines a coordinated pair
 const PRESETS = [
-  { id: 'blue', name: 'Azul Eléctrico', colorClass: 'bg-[#3390ec]', textClass: 'text-white' },
-  { id: 'green', name: 'Verde Menta', colorClass: 'bg-[#10b981]', textClass: 'text-white' },
-  { id: 'purple', name: 'Púrpura Neón', colorClass: 'bg-[#a855f7]', textClass: 'text-white' },
-  { id: 'gray', name: 'Gris Acero', colorClass: 'bg-[#64748b]', textClass: 'text-white' },
-  { id: 'orange', name: 'Naranja Atardecer', colorClass: 'bg-[#f97316]', textClass: 'text-white' },
-  { id: 'gradient-neon', name: 'Gradiente Neón', colorClass: 'bg-gradient-to-r from-rose-500 via-purple-500 to-cyan-500', textClass: 'text-white' },
+  { id: 'blue', name: 'Azul Eléctrico', colorClass: 'bg-[#3390ec]', textClass: 'text-white', partnerClass: 'bg-slate-100 dark:bg-slate-800 text-gray-900 dark:text-gray-100' },
+  { id: 'green', name: 'Verde Menta', colorClass: 'bg-[#10b981]', textClass: 'text-white', partnerClass: 'bg-emerald-50 dark:bg-emerald-950/40 text-gray-900 dark:text-gray-100' },
+  { id: 'purple', name: 'Púrpura Neón', colorClass: 'bg-[#a855f7]', textClass: 'text-white', partnerClass: 'bg-purple-50 dark:bg-purple-950/40 text-gray-900 dark:text-gray-100' },
+  { id: 'gray', name: 'Gris Acero', colorClass: 'bg-[#64748b]', textClass: 'text-white', partnerClass: 'bg-slate-100 dark:bg-slate-800 text-gray-900 dark:text-gray-100' },
+  { id: 'orange', name: 'Naranja Atardecer', colorClass: 'bg-[#f97316]', textClass: 'text-white', partnerClass: 'bg-orange-50 dark:bg-orange-950/40 text-gray-900 dark:text-gray-100' },
+  { id: 'gradient-neon', name: 'Gradiente Neón', colorClass: 'bg-gradient-to-r from-rose-500 via-purple-500 to-cyan-500', textClass: 'text-white', partnerClass: 'bg-slate-50 dark:bg-slate-900 text-gray-900 dark:text-gray-100' },
 ];
 
 // 3 High Quality Wallpapers
@@ -42,7 +42,12 @@ const WALLPAPERS = [
 export default function ChatCustomizer({ chatStyle, onChangeStyle }: ChatCustomizerProps) {
   
   const handleSelectColor = (colorId: string) => {
-    const updated = { ...chatStyle, bubbleColor: colorId };
+    const preset = PRESETS.find(p => p.id === colorId);
+    const updated = {
+      ...chatStyle,
+      bubbleColor: colorId,
+      partnerBubbleColor: preset?.partnerClass || 'bg-slate-100 dark:bg-slate-800 text-gray-900 dark:text-gray-100',
+    };
     onChangeStyle(updated);
   };
 

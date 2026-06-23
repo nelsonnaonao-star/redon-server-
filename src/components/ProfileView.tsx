@@ -17,9 +17,10 @@ import {
   ArrowLeft,
   Shield,
   Volume2,
-  Wifi
+  Wifi,
+  MessageCircle,
+  Image
 } from 'lucide-react';
-import ChatCustomizer from './ChatCustomizer';
 
 interface ProfileViewProps {
   profile: UserProfile;
@@ -30,6 +31,28 @@ interface ProfileViewProps {
   chatStyle: ChatStyle;
   onUpdateChatStyle: (updated: ChatStyle) => void;
 }
+
+const BUBBLE_PRESETS = [
+  { id: 'blue', name: 'Azul Eléctrico', colorClass: 'bg-[#3390ec]', partnerClass: 'bg-slate-100 dark:bg-slate-800 text-gray-900 dark:text-gray-100' },
+  { id: 'green', name: 'Verde Menta', colorClass: 'bg-[#10b981]', partnerClass: 'bg-emerald-50 dark:bg-emerald-950/40 text-gray-900 dark:text-gray-100' },
+  { id: 'purple', name: 'Púrpura Neón', colorClass: 'bg-[#a855f7]', partnerClass: 'bg-purple-50 dark:bg-purple-950/40 text-gray-900 dark:text-gray-100' },
+  { id: 'gray', name: 'Gris Acero', colorClass: 'bg-[#64748b]', partnerClass: 'bg-slate-100 dark:bg-slate-800 text-gray-900 dark:text-gray-100' },
+  { id: 'orange', name: 'Naranja Atardecer', colorClass: 'bg-[#f97316]', partnerClass: 'bg-orange-50 dark:bg-orange-950/40 text-gray-900 dark:text-gray-100' },
+  { id: 'gradient-neon', name: 'Gradiente Neón', colorClass: 'bg-gradient-to-r from-rose-500 via-purple-500 to-cyan-500', partnerClass: 'bg-slate-50 dark:bg-slate-900 text-gray-900 dark:text-gray-100' },
+  { id: 'gradient-cyan', name: 'Gradiente Turquesa', colorClass: 'bg-gradient-to-r from-cyan-500 to-blue-600', partnerClass: 'bg-cyan-50 dark:bg-cyan-950/40 text-gray-900 dark:text-gray-100' },
+  { id: 'gradient-pink', name: 'Gradiente Rosa', colorClass: 'bg-gradient-to-r from-pink-500 to-rose-500', partnerClass: 'bg-pink-50 dark:bg-pink-950/40 text-gray-900 dark:text-gray-100' },
+];
+
+const WALLPAPERS = [
+  { id: 'abstracto', name: 'Abstracto', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop' },
+  { id: 'espacio', name: 'Espacio', url: 'https://images.unsplash.com/photo-1506318137071-a8e063b4bec0?q=80&w=600&auto=format&fit=crop' },
+  { id: 'minimalista', name: 'Minimalista', url: 'https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=600&auto=format&fit=crop' },
+  { id: 'cyberpunk', name: 'Cyberpunk', url: 'https://images.unsplash.com/photo-1553356084-58ef4a2e2e9c?q=80&w=600&auto=format&fit=crop' },
+  { id: 'oscuro', name: 'Textura Oscura', url: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?q=80&w=600&auto=format&fit=crop' },
+  { id: 'bosque', name: 'Bosque Nocturno', url: 'https://images.unsplash.com/photo-1518531933037-91b2f5f229cc?q=80&w=600&auto=format&fit=crop' },
+  { id: 'geometrico', name: 'Geométrico', url: 'https://images.unsplash.com/photo-1550859492-d5da9d8e45f3?q=80&w=600&auto=format&fit=crop' },
+  { id: 'acuarela', name: 'Acuarela', url: 'https://images.unsplash.com/photo-1578301978693-85fa9c0320b9?q=80&w=600&auto=format&fit=crop' },
+];
 
 export default function ProfileView({ 
   profile, 
@@ -47,6 +70,11 @@ export default function ProfileView({
   const [editUsername, setEditUsername] = useState(profile.username);
   const [showStatusAlert, setShowStatusAlert] = useState<string | null>(null);
   const [activeSetting, setActiveSetting] = useState<string | null>(null);
+  const [customizationMode, setCustomizationMode] = useState<'menu' | 'bubbles' | 'wallpapers'>('menu');
+  const [pendingBubbleId, setPendingBubbleId] = useState(chatStyle.bubbleColor);
+  const [pendingPartnerBubbleId, setPendingPartnerBubbleId] = useState(() => localStorage.getItem('chat_bubble_partner_id') || 'gray');
+  const [tabMode, setTabMode] = useState<'sent' | 'received'>('sent');
+  const [pendingWallpaper, setPendingWallpaper] = useState(chatStyle.bubbleBackground);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = () => {
@@ -82,6 +110,28 @@ export default function ProfileView({
       triggerAlert("¡Foto de perfil actualizada!");
     };
     reader.readAsDataURL(file);
+  };
+
+  const confirmBubbleSelection = () => {
+    const sentPreset = BUBBLE_PRESETS.find(p => p.id === pendingBubbleId);
+    const recvPreset = BUBBLE_PRESETS.find(p => p.id === pendingPartnerBubbleId);
+    onUpdateChatStyle({
+      ...chatStyle,
+      bubbleColor: pendingBubbleId,
+      partnerBubbleColor: recvPreset?.partnerClass || 'bg-slate-100 dark:bg-slate-800 text-gray-900 dark:text-gray-100',
+    });
+    localStorage.setItem('chat_bubble_partner_id', pendingPartnerBubbleId);
+    triggerAlert('¡Ajustes aplicados con éxito! 🎉');
+    setTimeout(() => setCustomizationMode('menu'), 1200);
+  };
+
+  const confirmWallpaperSelection = () => {
+    onUpdateChatStyle({
+      ...chatStyle,
+      bubbleBackground: pendingWallpaper,
+    });
+    triggerAlert('¡Ajustes aplicados con éxito! 🎉');
+    setTimeout(() => setCustomizationMode('menu'), 1200);
   };
 
   const renderSettingSubView = () => {
@@ -212,6 +262,123 @@ export default function ProfileView({
       </div>
     );
   };
+
+  const renderBubblesScreen = () => {
+    const currentId = tabMode === 'sent' ? pendingBubbleId : pendingPartnerBubbleId;
+    const setCurrentId = (id: string) => {
+      if (tabMode === 'sent') setPendingBubbleId(id);
+      else setPendingPartnerBubbleId(id);
+    };
+    return (
+    <div className="flex flex-col h-full bg-[#f0f2f5] dark:bg-slate-900 overflow-y-auto animate-fade-in">
+      <div className="sticky top-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md z-10 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
+        <div className="flex items-center gap-3 mb-3">
+          <button onClick={() => setCustomizationMode('menu')} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-all cursor-pointer">
+            <ArrowLeft className="w-5 h-5 text-slate-600 dark:text-slate-300" />
+          </button>
+          <h3 className="text-slate-900 dark:text-white font-bold text-base">Color de Burbujas</h3>
+        </div>
+        {/* Tabs: Sent vs Received */}
+        <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 rounded-xl p-1">
+          <button
+            onClick={() => setTabMode('sent')}
+            className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
+              tabMode === 'sent' ? 'bg-white dark:bg-slate-700 text-[#3390ec] shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700'
+            }`}
+          >Mis Mensajes</button>
+          <button
+            onClick={() => setTabMode('received')}
+            className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
+              tabMode === 'received' ? 'bg-white dark:bg-slate-700 text-[#3390ec] shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700'
+            }`}
+          >Mensajes Recibidos</button>
+        </div>
+      </div>
+      <div className="flex-1 px-4 pt-5 pb-8">
+        <p className="text-xs text-slate-400 text-center mb-4 max-w-lg mx-auto">
+          {tabMode === 'sent' ? 'Elige el color de tus mensajes enviados' : 'Elige el color de los mensajes que recibes'}
+        </p>
+        <div className="grid grid-cols-4 gap-3 max-w-lg mx-auto">
+          {BUBBLE_PRESETS.map((p) => {
+            const isSelected = currentId === p.id;
+            const displayClass = tabMode === 'sent' ? p.colorClass : p.partnerClass?.split(' ')[0] || 'bg-slate-100';
+            return (
+              <button
+                key={p.id}
+                onClick={() => setCurrentId(p.id)}
+                className={`p-3 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all cursor-pointer active:scale-95 ${
+                  isSelected ? 'border-[#3390ec] bg-white dark:bg-slate-800 shadow-lg' : 'border-slate-100 dark:border-slate-800 bg-white/70 dark:bg-slate-900 hover:bg-white dark:hover:bg-slate-800'
+                }`}
+              >
+                <div className={`w-9 h-9 rounded-full ${displayClass} flex items-center justify-center shadow-sm`}>
+                  {isSelected && <Check className="w-5 h-5 text-white drop-shadow" />}
+                </div>
+                <span className="text-[9px] font-bold text-slate-700 dark:text-slate-300 text-center leading-tight">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="max-w-lg mx-auto mt-8">
+          <button
+            onClick={confirmBubbleSelection}
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl font-semibold text-sm shadow-md transition-all cursor-pointer"
+          >
+            Confirmar Cambios
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+  };
+
+  const renderWallpapersScreen = () => (
+    <div className="flex flex-col h-full bg-[#f0f2f5] dark:bg-slate-900 overflow-y-auto animate-fade-in">
+      <div className="sticky top-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md z-10 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setCustomizationMode('menu')} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-all cursor-pointer">
+            <ArrowLeft className="w-5 h-5 text-slate-600 dark:text-slate-300" />
+          </button>
+          <h3 className="text-slate-900 dark:text-white font-bold text-base">Fondo de Chat</h3>
+        </div>
+      </div>
+      <div className="flex-1 px-4 pt-5 pb-8">
+        <div className="grid grid-cols-2 gap-3 max-w-lg mx-auto">
+          {WALLPAPERS.map((w) => {
+            const isSelected = pendingWallpaper === w.url;
+            return (
+              <button
+                key={w.id}
+                onClick={() => setPendingWallpaper(w.url)}
+                className={`relative h-24 rounded-xl overflow-hidden border-2 transition-all cursor-pointer active:scale-95 ${
+                  isSelected ? 'border-[#3390ec] ring-2 ring-blue-500/20' : 'border-slate-100 dark:border-slate-800 hover:brightness-105'
+                }`}
+              >
+                <img src={w.url} alt={w.name} className="absolute inset-0 w-full h-full object-cover select-none pointer-events-none" referrerPolicy="no-referrer" />
+                <div className="absolute inset-0 bg-black/15" />
+                {isSelected && (
+                  <div className="absolute top-1.5 right-1.5 bg-white dark:bg-slate-800 text-[#3390ec] p-0.5 rounded-full shadow-sm z-10">
+                    <Check className="w-3.5 h-3.5" />
+                  </div>
+                )}
+                <span className="absolute bottom-1.5 left-1.5 text-[9px] font-bold text-white bg-black/50 backdrop-blur-sm px-2 py-0.5 rounded-md">{w.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="max-w-lg mx-auto mt-6">
+          <button
+            onClick={confirmWallpaperSelection}
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl font-semibold text-sm shadow-md transition-all cursor-pointer"
+          >
+            Confirmar Cambios
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (customizationMode === 'bubbles') return renderBubblesScreen();
+  if (customizationMode === 'wallpapers') return renderWallpapersScreen();
 
   return (
     <div className="flex flex-col h-full bg-[#f0f2f5] dark:bg-slate-900 overflow-y-auto transition-colors duration-300 animate-fade-in">
@@ -379,8 +546,33 @@ export default function ProfileView({
         <div className="max-w-md mx-auto">
           <h2 className="text-xs font-semibold text-slate-400 dark:text-slate-450 tracking-wider uppercase mb-4 px-1 animate-pulse">Ajustes de RED ON</h2>
           
-          {/* Real-time customizable chat bubble styling component */}
-          <ChatCustomizer chatStyle={chatStyle} onChangeStyle={onUpdateChatStyle} />
+          {/* Customization rows with chevron navigation */}
+          <div className="space-y-0.5 mb-4">
+            <div onClick={() => { setPendingBubbleId(chatStyle.bubbleColor); setCustomizationMode('bubbles'); }} className="py-3.5 flex items-center justify-between hover:bg-slate-50/80 dark:hover:bg-slate-700/50 -mx-3 px-3 rounded-xl transition-all cursor-pointer group">
+              <div className="flex items-center gap-3.5">
+                <div className="w-9 bg-indigo-500 text-white rounded-full aspect-square flex items-center justify-center shadow-[0_2px_4px_rgba(99,102,241,0.15)]">
+                  <MessageCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-slate-900 dark:text-slate-200 font-semibold text-sm leading-tight group-hover:text-indigo-500 transition-colors">Cambiar burbujas del chat</h3>
+                  <p className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">Colores y gradientes</p>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-300 dark:text-slate-550 group-hover:text-slate-400 transition-colors" />
+            </div>
+            <div onClick={() => { setPendingWallpaper(chatStyle.bubbleBackground); setCustomizationMode('wallpapers'); }} className="py-3.5 flex items-center justify-between hover:bg-slate-50/80 dark:hover:bg-slate-700/50 -mx-3 px-3 rounded-xl transition-all cursor-pointer group">
+              <div className="flex items-center gap-3.5">
+                <div className="w-9 bg-emerald-500 text-white rounded-full aspect-square flex items-center justify-center shadow-[0_2px_4px_rgba(16,185,129,0.15)]">
+                  <Image className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-slate-900 dark:text-slate-200 font-semibold text-sm leading-tight group-hover:text-emerald-500 transition-colors">Cambiar fondo del chat</h3>
+                  <p className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">Fondos de alta calidad</p>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-300 dark:text-slate-550 group-hover:text-slate-400 transition-colors" />
+            </div>
+          </div>
 
           <div className="space-y-0.5 divide-y divide-slate-100/70 dark:divide-slate-700/60">
 {activeSetting ? renderSettingSubView() : (

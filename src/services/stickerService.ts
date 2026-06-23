@@ -110,33 +110,30 @@ const BUILTIN_STICKERS: StickerPack[] = [
 
 export async function getStickerPacks(): Promise<StickerPack[]> {
   // Return built-in emoji stickers + try to fetch custom from Supabase
-  try {
-    const { data } = await supabase
-      .from('sticker_packs')
-      .select('*')
-      .order('created_at', { ascending: true });
-
-    if (data && data.length > 0) {
-      for (const pack of data) {
-        const { data: stickers } = await supabase
-          .from('stickers')
-          .select('*')
-          .eq('pack_id', pack.id);
-        if (stickers) {
-          BUILTIN_STICKERS.push({
-            id: pack.id,
-            name: pack.name,
-            icon: pack.icon || '📦',
-            stickers: stickers.map((s: any) => ({
-              id: s.id,
-              image_url: s.image_url,
-              emoji: s.emoji,
-            })),
-          });
-        }
+  const { data, error } = await supabase
+    .from('sticker_packs')
+    .select('*')
+    .order('created_at', { ascending: true });
+  if (!error && data && data.length > 0) {
+    for (const pack of data) {
+      const { data: stickers } = await supabase
+        .from('stickers')
+        .select('*')
+        .eq('pack_id', pack.id);
+      if (stickers) {
+        BUILTIN_STICKERS.push({
+          id: pack.id,
+          name: pack.name,
+          icon: pack.icon || '📦',
+          stickers: stickers.map((s: any) => ({
+            id: s.id,
+            image_url: s.image_url,
+            emoji: s.emoji,
+          })),
+        });
       }
     }
-  } catch {}
+  }
   return BUILTIN_STICKERS;
 }
 

@@ -7,6 +7,8 @@ export interface Message {
   audioUrl?: string;
   audioDuration?: number;
   mimeType?: string;
+  isEdited?: boolean;
+  isDeleted?: boolean;
 }
 
 export interface Chat {
@@ -31,6 +33,19 @@ export interface UserProfile {
   phone: string;
   username: string;
   bio: string;
+  realEmail?: string;
+}
+
+export interface MomentAnimMeta {
+  textContent?: string;
+  textAnimation?: string;
+  textAnimationSpeed?: number;
+  textFont?: string;
+  textColor?: string;
+  textPositionX?: number;
+  textPositionY?: number;
+  textBg?: boolean;
+  activeFilter?: string;
 }
 
 export interface Moment {
@@ -45,6 +60,7 @@ export interface Moment {
   profileId?: string;
   viewCount?: number;
   reactions?: { emoji: string; count: number }[];
+  animMeta?: MomentAnimMeta;
 }
 
 export interface InterestNews {
@@ -78,6 +94,7 @@ export type ActiveTab =
 export interface ChatStyle {
   bubbleColor: string;
   bubbleBackground: string;
+  partnerBubbleColor: string;
 }
 
 export interface BusinessListing {

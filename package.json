@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=5173 --host=0.0.0.0",
-    "dev:server": "node server.js",
-    "dev:all": "concurrently \"vite --port=5173 --host=0.0.0.0\" \"node server.js\"",
+    "dev:server": "cd server && node src/index.js",
+    "dev:all": "concurrently \"vite --port=5173 --host=0.0.0.0\" \"cd server && node src/index.js\"",
     "start": "cd server && node src/index.js",
     "build": "vite build",
     "preview": "vite preview",
@@ -38,6 +38,8 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",

@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Chat, UserProfile, ActiveTab, Moment, ChatStyle, BusinessListing } from './types';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Chat, Message, UserProfile, ActiveTab, Moment, ChatStyle, BusinessListing } from './types';
 import { supabase } from './lib/supabase';
 import { api } from './services/api';
 import { connectSocket, disconnectSocket, setMessageHandler, setNewChatHandler, setStatusUpdateHandler } from './services/socket';
 import { playSound } from './services/soundPlayer';
-import { setupCapacitorPush } from './services/pushCapacitor';
+import { setupCapacitorPush, sendFcmPush } from './services/pushCapacitor';
 
 import WelcomeView from './components/WelcomeView';
 import AuthView from './components/AuthView';
@@ -17,6 +17,11 @@ import ProfileView from './components/ProfileView';
 
 import { MessageSquare, User, Sparkles, DollarSign, TrendingUp, LogOut } from 'lucide-react';
 import { CallSuite } from './components/CallSuite';
+import Toast from './components/Toast';
+import ErrorBoundary from './components/ErrorBoundary';
+import Skeleton from './components/Skeleton';
+import { motion, AnimatePresence } from 'motion/react';
+import { showToast } from './services/toastService';
 
 type IncomingCall = {
   chatId: string;
@@ -39,19 +44,30 @@ export default function App() {
     chatId: string;
     contactId: string;
     direction: 'outgoing' | 'incoming';
+    callType: 'audio' | 'video';
   } | null>(null);
+
+  const callChanRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const [chatStyle, setChatStyle] = useState<ChatStyle>(() => {
     const savedColor = localStorage.getItem('chat_bubble_color');
     const savedBG = localStorage.getItem('chat_bubble_background');
-    return { bubbleColor: savedColor || 'blue', bubbleBackground: savedBG || '' };
+    const savedPartner = localStorage.getItem('chat_bubble_partner_color');
+    return {
+      bubbleColor: savedColor || 'blue',
+      bubbleBackground: savedBG || '',
+      partnerBubbleColor: savedPartner || 'bg-slate-100 dark:bg-slate-800 text-gray-900 dark:text-gray-100',
+    };
   });
 
   const handleUpdateChatStyle = (newStyle: ChatStyle) => {
     setChatStyle(newStyle);
     localStorage.setItem('chat_bubble_color', newStyle.bubbleColor);
     localStorage.setItem('chat_bubble_background', newStyle.bubbleBackground);
+    localStorage.setItem('chat_bubble_partner_color', newStyle.partnerBubbleColor);
   };
+
+  const [isLoading, setIsLoading] = useState(true);
 
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const saved = localStorage.getItem('theme');
@@ -71,6 +87,7 @@ export default function App() {
 
   // Restore session on mount (Supabase maneja el token automáticamente)
   useEffect(() => {
+    setIsLoading(true);
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setUserId(session.user.id);
@@ -81,11 +98,20 @@ export default function App() {
           supabase.auth.signOut();
           setActiveTab('auth');
         });
-        api.getChats().then(setChats).catch(() => {});
-        api.getMoments().then(setMoments).catch(() => {});
+        api.getChats().then(serverChats => {
+          const savedRaw = localStorage.getItem('saved_chats');
+          let savedChats: Chat[] = [];
+          if (savedRaw) try { savedChats = JSON.parse(savedRaw) as Chat[]; } catch {}
+          const serverIds = new Set(serverChats.map(c => c.id));
+          const merged = [...serverChats, ...savedChats.filter(c => !serverIds.has(c.id))];
+          saveChats(merged);
+          setChats(merged);
+        }).catch(() => showToast('Error de conexión al cargar chats'));
+        api.getMoments().then(setMoments).catch(() => showToast('Error de conexión al cargar momentos'));
         setupCapacitorPush(session.user.id).catch(() => {});
       }
-    });
+      setIsLoading(false);
+    }).catch(() => setIsLoading(false));
   }, []);
 
   // Realtime subscription via Supabase
@@ -94,10 +120,15 @@ export default function App() {
     connectSocket(userId);
 
     setMessageHandler((data) => {
-      const { chatId, sender, text, time, id } = data;
+      const { chatId, sender, text, time, id, audioUrl, audioDuration, mimeType } = data;
       setChats(prev => prev.map(c => {
         if (c.id !== chatId) return c;
-        const msg = { id, sender, text, time: time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), status: 'sent' as const };
+        const msg = {
+          id, sender: sender as 'me' | 'them', text,
+          time: time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          status: 'sent' as const,
+          ...(audioUrl ? { audioUrl, audioDuration: audioDuration || 0, mimeType: mimeType || 'audio/webm' } : {}),
+        };
         if (c.messages.some(m => m.id === msg.id)) return c;
 
         // Play notification sound if not on this chat
@@ -149,7 +180,8 @@ export default function App() {
             sender: 'them',
             text: message.text,
             time: message.time,
-            status: 'sent'
+            status: 'sent',
+            ...(message.audioUrl ? { audioUrl: message.audioUrl, audioDuration: message.audioDuration || 0, mimeType: message.mimeType || 'audio/webm' } : {}),
           }]
         };
         return [newChat, ...prev];
@@ -176,6 +208,7 @@ export default function App() {
             profileId: m.user_id || '',
             viewCount: 0,
             reactions: [],
+            animMeta: m.anim_meta || undefined,
           };
           setMoments(prev => [newMoment, ...prev]);
         }
@@ -192,6 +225,7 @@ export default function App() {
         chatId: payload.payload.chatId,
         contactId: payload.payload.callerId,
         direction: 'incoming',
+        callType: payload.payload.callType || 'audio',
       });
     });
     callNotifyChannel.subscribe();
@@ -199,60 +233,82 @@ export default function App() {
     // Listen for incoming calls from push notifications
     const handleIncomingCallFromPush = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.chatId && detail?.callerId) {
+      const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
+      const chatId = d?.chatId || d?.roomId || '';
+      if (chatId && d?.callerId) {
         setCallState({
           isOpen: true,
-          contactName: detail.callerName || 'Llamada entrante',
-          contactAvatar: '',
-          chatId: detail.chatId,
-          contactId: detail.callerId,
+          contactName: d.callerName || 'Llamada entrante',
+          contactAvatar: d.callerAvatar || '',
+          chatId: chatId,
+          contactId: d.callerId,
           direction: 'incoming',
+          callType: d.callType || 'audio',
         });
       }
     };
     window.addEventListener('incoming-call', handleIncomingCallFromPush);
 
+    // Handle notification tap → open the chat
+    const handleOpenChat = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.chatId && detail?.contactId) {
+        setActiveChatId(detail.chatId);
+        setActiveTab('chats');
+      }
+    };
+    window.addEventListener('open-chat', handleOpenChat);
+
     return () => {
       window.removeEventListener('incoming-call', handleIncomingCallFromPush);
+      window.removeEventListener('open-chat', handleOpenChat);
       disconnectSocket();
       supabase.removeChannel(momentChannel);
       supabase.removeChannel(callNotifyChannel);
     };
   }, [userId, activeChatId]);
 
-  const handleStartCall = useCallback(async (chatId: string, contactId: string, contactName: string, contactAvatar: string) => {
+  const handleStartCall = useCallback(async (chatId: string, contactId: string, contactName: string, contactAvatar: string, callType: 'audio' | 'video') => {
     if (!userId) return;
+    if (!contactId) { console.warn('handleStartCall: missing contactId'); return; }
     // Subscribe to channel first, then send broadcast
     const chan = supabase.channel(`calls:${contactId}`);
+    callChanRef.current = chan;
     chan.subscribe((status: string) => {
       if (status === 'SUBSCRIBED') {
         chan.send({
           type: 'broadcast',
           event: 'incoming-call',
-          payload: { chatId, callerId: userId, callerName: profile.name || contactName, callerAvatar: profile.avatar || contactAvatar },
+          payload: { chatId, callerId: userId, callerName: profile.name || contactName, callerAvatar: profile.avatar || contactAvatar, callType },
+        }).then(() => {
+          // Cleanup after sending — no longer needed
+          supabase.removeChannel(chan);
+          if (callChanRef.current === chan) callChanRef.current = null;
         });
       }
     });
     // Send FCM push to wake the callee if minimized
-    const pushPayload = JSON.stringify({
-      profile_id: contactId,
-      title: profile.name || 'RED ON',
-      body: 'Llamada entrante...',
-      data: { type: 'call', chatId, callerId: userId, callerName: profile.name || contactName },
-    });
-    for (const url of [
-      `http://${localStorage.getItem('redon_server_ip') || 'localhost'}:3001/api/fcm/send`,
-      'https://disciplined-quietude-production-7b38.up.railway.app/api/fcm/send',
-    ]) {
-      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: pushPayload }).catch(() => {});
-    }
+    sendFcmPush(
+      contactId,
+      profile.name || 'RED ON',
+      'Llamada entrante...',
+      { type: 'call', chatId, callerId: userId, callerName: profile.name || contactName, callerAvatar: profile.avatar || contactAvatar, callType },
+    );
     // Open own call UI
-    setCallState({ isOpen: true, contactName, contactAvatar, chatId, contactId, direction: 'outgoing' });
+    setCallState({ isOpen: true, contactName, contactAvatar, chatId, contactId, direction: 'outgoing', callType });
   }, [userId, profile]);
 
   const handleEndCall = useCallback(() => {
+    if (callChanRef.current) {
+      supabase.removeChannel(callChanRef.current);
+      callChanRef.current = null;
+    }
     setCallState(null);
   }, []);
+
+  const saveChats = (allChats: Chat[]) => {
+    try { localStorage.setItem('saved_chats', JSON.stringify(allChats)); } catch {}
+  };
 
   const activeChat = chats.find(c => c.id === activeChatId);
   const totalUnread = chats.reduce((acc, c) => acc + c.unreadCount, 0);
@@ -271,19 +327,34 @@ export default function App() {
     try {
       await api.sendMessage(chatId, text);
     } catch {
-      // Silently fail — message is already shown optimistically
+      showToast('Error al enviar mensaje. Reintenta.');
     }
   }, []);
 
   const handleSendAudioMessage = useCallback(async (chatId: string, audioBlob: Blob, duration: number) => {
     const msgId = String(Date.now());
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const audioUrl = URL.createObjectURL(audioBlob);
     const text = '🎤 Nota de voz';
+    const mimeType = audioBlob.type || 'audio/webm';
+
+    // Upload audio to Supabase Storage so the recipient can download it
+    let audioUrl: string;
+    try {
+      const fileName = `voice-${userId}-${Date.now()}.webm`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('voice-notes')
+        .upload(fileName, audioBlob, { contentType: mimeType, upsert: false });
+      if (uploadError) throw uploadError;
+      const { data: publicUrlData } = supabase.storage.from('voice-notes').getPublicUrl(fileName);
+      audioUrl = publicUrlData.publicUrl;
+    } catch {
+      // Fallback: use local blob URL (sender can still play it)
+      audioUrl = URL.createObjectURL(audioBlob);
+    }
 
     const newMessage: Message = {
       id: msgId, sender: 'me' as const, text, time, status: 'sent' as const,
-      audioUrl, audioDuration: duration, mimeType: audioBlob.type || 'audio/webm',
+      audioUrl, audioDuration: duration, mimeType,
     };
 
     setChats(prev => prev.map(c => {
@@ -292,9 +363,11 @@ export default function App() {
     }));
 
     try {
-      await api.sendMessage(chatId, text);
-    } catch {}
-  }, []);
+      await api.sendMessage(chatId, text, { audioUrl, audioDuration: duration, mimeType });
+    } catch {
+      showToast('Error al enviar nota de voz');
+    }
+  }, [userId]);
 
   // Load messages when opening a chat
   const handleSelectChat = useCallback(async (chatId: string) => {
@@ -304,7 +377,6 @@ export default function App() {
       const freshMessages = await api.getMessages(chatId);
       setChats(prev => prev.map(c => {
         if (c.id !== chatId) return c;
-        // Merge: keep existing status for messages we already know about
         const merged = freshMessages.map((fm: any) => {
           const existing = c.messages.find(m => m.id === fm.id);
           return existing ? { ...fm, status: existing.status } : fm;
@@ -312,15 +384,45 @@ export default function App() {
         return { ...c, messages: merged };
       }));
       api.markRead(chatId).catch(() => {});
-    } catch {}
+    } catch {
+      showToast('Error al cargar mensajes');
+    }
   }, []);
+
+  const handleEditMessage = useCallback(async (messageId: string, newText: string) => {
+    if (!activeChatId) return;
+    setChats(prev => prev.map(c => {
+      if (c.id !== activeChatId) return c;
+      return { ...c, messages: c.messages.map(m => m.id === messageId ? { ...m, text: newText, isEdited: true } : m) };
+    }));
+    try {
+      await api.editMessage(messageId, newText);
+    } catch {
+      showToast('Error al editar mensaje');
+    }
+  }, [activeChatId]);
+
+  const handleDeleteMessage = useCallback(async (messageId: string) => {
+    if (!activeChatId) return;
+    setChats(prev => prev.map(c => {
+      if (c.id !== activeChatId) return c;
+      return { ...c, messages: c.messages.map(m => m.id === messageId ? { ...m, isDeleted: true } : m) };
+    }));
+    try {
+      await api.deleteMessage(messageId);
+    } catch {
+      showToast('Error al eliminar mensaje');
+    }
+  }, [activeChatId]);
 
   const handleUpdateProfile = async (updated: UserProfile) => {
     setProfile(updated);
     localStorage.setItem('redon_profile', JSON.stringify(updated));
     try {
       await api.updateProfile(updated);
-    } catch {}
+    } catch {
+      showToast('Error al actualizar perfil');
+    }
   };
 
   const handleAddChat = (newChat: Chat) => {
@@ -337,10 +439,13 @@ export default function App() {
         hasUnseen: false,
         image: newMoment.image,
         caption: newMoment.caption,
+        animMeta: newMoment.animMeta,
       });
       const updated = await api.getMoments();
       setMoments(updated);
-    } catch {}
+    } catch {
+      showToast('Error al publicar momento');
+    }
   };
 
   const handleStartBusinessChat = (biz: BusinessListing) => {
@@ -371,7 +476,7 @@ export default function App() {
   const handleAuthSuccess = (_token: string, user: any) => {
     setUserId(user.id);
     setProfile({ name: user.name, avatar: user.avatar || '', phone: user.phone, username: user.username, bio: user.bio || '' });
-    api.getChats().then(setChats).catch(() => {});
+    api.getChats().then(setChats).catch(() => showToast('Error al cargar tus chats'));
     setActiveTab('chats');
   };
 
@@ -388,7 +493,9 @@ export default function App() {
   const isInApp = activeTab !== 'welcome' && activeTab !== 'auth';
 
   return (
-    <div className="h-screen w-screen bg-bg-warm dark:bg-dark-bg text-text-primary dark:text-dark-text-primary font-sans flex flex-col overflow-hidden transition-colors duration-300">
+    <div className="h-screen w-screen bg-bg-warm dark:bg-dark-bg text-text-primary dark:text-dark-text-primary font-sans flex flex-col overflow-hidden transition-colors duration-300 max-w-md mx-auto shadow-xl relative">
+      <Toast />
+
       {activeTab === 'welcome' && (
         <WelcomeView onStart={() => setActiveTab('auth')} />
       )}
@@ -401,13 +508,22 @@ export default function App() {
             <header className="glass border-b border-border/80 dark:border-dark-border/60 px-5 py-3.5 flex items-center justify-between flex-shrink-0 z-10 transition-all duration-300">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-brand animate-pulse shadow-[0_0_6px_rgba(43,126,251,0.5)]" />
-                <h2 className="font-display text-text-primary dark:text-dark-text-primary font-bold text-base tracking-tight select-none">
-                  {activeTab === 'chats' && 'Chats'}
-                  {activeTab === 'moments' && 'Momentos'}
-                  {activeTab === 'interests' && 'Indicadores'}
-                  {activeTab === 'emprendedor' && 'Modo Emprendedor'}
-                  {activeTab === 'profile' && 'Mi Perfil'}
-                </h2>
+                <AnimatePresence mode="wait">
+                  <motion.span
+                    key={activeTab}
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 8 }}
+                    transition={{ duration: 0.15 }}
+                    className="font-display text-text-primary dark:text-dark-text-primary font-bold text-base tracking-tight select-none block"
+                  >
+                    {activeTab === 'chats' && 'Chats'}
+                    {activeTab === 'moments' && 'Momentos'}
+                    {activeTab === 'interests' && 'Indicadores'}
+                    {activeTab === 'emprendedor' && 'Modo Emprendedor'}
+                    {activeTab === 'profile' && 'Mi Perfil'}
+                  </motion.span>
+                </AnimatePresence>
               </div>
               <div className="flex items-center gap-2">
                 {activeTab === 'chats' && (
@@ -438,53 +554,93 @@ export default function App() {
             </header>
           )}
           <div className="flex-1 overflow-hidden relative bg-bg-warm dark:bg-dark-bg">
+            <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.12 }}
+              className="absolute inset-0"
+            >
             {activeTab === 'chats' && (
-              activeChatId && activeChat ? (
+              <ErrorBoundary name="ChatDetail">
+              {activeChatId && activeChat ? (
                 <ChatDetail
                   chat={activeChat}
                   onBack={() => setActiveChatId(null)}
                   onSendMessage={handleSendMessage}
                   onSendAudioMessage={handleSendAudioMessage}
+                  onEditMessage={handleEditMessage}
+                  onDeleteMessage={handleDeleteMessage}
                   chatStyle={chatStyle}
                   onStartCall={handleStartCall}
                 />
               ) : (
                 <ChatList
                   chats={chats}
+                  isLoading={isLoading}
                   onSelectChat={(id) => handleSelectChat(id)}
-                  onAddChat={(newChat) => {
-                    setChats(prev => [newChat, ...prev]);
-                    setActiveChatId(newChat.id);
-                    if (newChat.id) {
-                      api.getMessages(newChat.id).then(msgs => {
-                        setChats(prev => prev.map(c => c.id === newChat.id ? { ...c, messages: msgs as any } : c));
-                      }).catch(() => {});
-                    }
-                  }}
+          onAddChat={(newChat) => {
+            setChats(prev => {
+              const exists = prev.findIndex(c => c.id === newChat.id);
+              let updated: Chat[];
+              if (exists >= 0) {
+                updated = [...prev];
+                updated[exists] = { ...updated[exists], ...newChat, messages: updated[exists].messages };
+              } else {
+                updated = [newChat, ...prev];
+              }
+              saveChats(updated);
+              return updated;
+            });
+            if (newChat.id) {
+              api.getMessages(newChat.id).then(msgs => {
+                setChats(prev => {
+                  const updated = prev.map(c => c.id === newChat.id ? { ...c, messages: msgs as any } : c);
+                  saveChats(updated);
+                  return updated;
+                });
+              }).catch(() => showToast('Error al cargar mensajes'));
+            }
+          }}
                   onDeleteChat={(id) => setChats(prev => prev.filter(c => c.id !== id))}
                 />
-              )
+              )}
+              </ErrorBoundary>
             )}
             {activeTab === 'moments' && (
-              <MomentsView profile={profile} moments={moments} onAddMoment={handleAddMoment} userId={userId} />
+              <ErrorBoundary name="Momentos">
+                <MomentsView profile={profile} moments={moments} onAddMoment={handleAddMoment} userId={userId} isLoading={isLoading} />
+              </ErrorBoundary>
             )}
-            {activeTab === 'interests' && <InterestsView />}
+            {activeTab === 'interests' && (
+              <ErrorBoundary name="Indicadores">
+                <InterestsView />
+              </ErrorBoundary>
+            )}
             {activeTab === 'emprendedor' && (
-              <EmprendedorView onStartBusinessChat={handleStartBusinessChat} />
+              <ErrorBoundary name="Emprendedor">
+                <EmprendedorView onStartBusinessChat={handleStartBusinessChat} />
+              </ErrorBoundary>
             )}
             {activeTab === 'profile' && (
-              <ProfileView
-                profile={profile}
-                onUpdateProfile={handleUpdateProfile}
-                isDarkMode={isDarkMode}
-                onToggleDarkMode={toggleTheme}
-                chatStyle={chatStyle}
-                onUpdateChatStyle={handleUpdateChatStyle}
-              />
+              <ErrorBoundary name="Perfil">
+                <ProfileView
+                  profile={profile}
+                  onUpdateProfile={handleUpdateProfile}
+                  isDarkMode={isDarkMode}
+                  onToggleDarkMode={toggleTheme}
+                  chatStyle={chatStyle}
+                  onUpdateChatStyle={handleUpdateChatStyle}
+                />
+              </ErrorBoundary>
             )}
+            </motion.div>
+            </AnimatePresence>
           </div>
           {!activeChatId && (
-            <nav className="h-16 bg-surface dark:bg-dark-surface border-t border-border/80 dark:border-dark-border/60 flex items-center justify-around px-2 z-20 select-none pb-1 flex-shrink-0 backdrop-blur-sm transition-colors duration-300">
+            <nav className="h-16 bg-surface dark:bg-dark-surface border-t border-border/80 dark:border-dark-border/60 w-full flex justify-between items-center px-1 z-20 select-none pb-1 flex-shrink-0 backdrop-blur-sm transition-colors duration-300">
               {[{
                 key: 'chats',
                 label: 'Chats',
@@ -501,7 +657,7 @@ export default function App() {
                 icon: DollarSign,
               }, {
                 key: 'emprendedor',
-                label: 'Negocio',
+                label: 'Modo Emprendedor',
                 icon: TrendingUp,
               }, {
                 key: 'profile',
@@ -509,10 +665,10 @@ export default function App() {
                 icon: User,
               }].map(({ key, label, icon: Icon, badge, dot }) => (
               <button key={key} onClick={() => setActiveTab(key as ActiveTab)}
-                className={`group flex-1 flex flex-col items-center justify-center py-1.5 relative transition-all duration-200 cursor-pointer select-none
-                  ${activeTab === key ? 'text-brand' : 'text-text-tertiary dark:text-dark-text-tertiary hover:text-text-secondary dark:hover:text-dark-text-secondary'}`}>
+                className={`group flex-1 min-w-0 flex flex-col items-center justify-center py-1.5 relative transition-all duration-200 cursor-pointer select-none
+                  ${activeTab === key ? 'text-gray-900 font-semibold' : 'text-gray-500 hover:text-gray-700'}`}>
                 <div className="relative">
-                  <Icon className={`w-5 h-5 transition-transform duration-200 ${activeTab === key ? 'scale-110' : 'group-hover:scale-105'}`} />
+                  <Icon className={`w-5 h-5 stroke-current transition-transform duration-200 ${activeTab === key ? 'scale-110' : 'group-hover:scale-105'}`} />
                   {badge != null && (
                     <span className="absolute -top-1.5 -right-2 bg-rose-500 text-white text-[8px] font-bold min-w-[16px] h-[16px] rounded-full flex items-center justify-center border-[2.5px] border-surface dark:border-dark-surface shadow-sm">
                       {badge > 99 ? '99+' : badge}
@@ -522,9 +678,9 @@ export default function App() {
                     <span className="absolute -top-1 -right-1.5 w-2 h-2 bg-brand rounded-full border-[2px] border-surface dark:border-dark-surface shadow-sm" />
                   )}
                 </div>
-                <span className={`text-[9px] font-bold mt-1.5 tracking-wider uppercase transition-colors duration-200`}>{label}</span>
+                <span className={`text-[10px] mt-1.5 whitespace-nowrap overflow-hidden text-ellipsis max-w-full transition-colors duration-200 ${activeTab === key ? 'font-bold' : 'font-medium'}`}>{label}</span>
                 {activeTab === key && (
-                  <span className="absolute bottom-0 w-5 h-[3px] bg-brand rounded-full shadow-[0_0_6px_rgba(43,126,251,0.4)]" />
+                  <span className="absolute bottom-0 w-5 h-[3px] bg-gray-900 rounded-full shadow-[0_0_6px_rgba(0,0,0,0.15)]" />
                 )}
               </button>
               ))}
@@ -534,21 +690,24 @@ export default function App() {
       )}
 
       {/* Call UI */}
-      {callState && (
-        <CallSuite
-          isOpen={callState.isOpen}
-          contactName={callState.contactName}
-          contactAvatar={callState.contactAvatar}
-          isGroup={false}
-          onClose={handleEndCall}
-          userId={userId}
-          contactId={callState.contactId}
-          chatId={callState.chatId}
-          direction={callState.direction}
-          onAcceptCall={() => {}}
-          onRejectCall={() => setCallState(null)}
-        />
-      )}
+      <ErrorBoundary name="Llamada">
+        {callState && (
+          <CallSuite
+            isOpen={callState.isOpen}
+            contactName={callState.contactName}
+            contactAvatar={callState.contactAvatar}
+            isGroup={false}
+            onClose={handleEndCall}
+            userId={userId}
+            contactId={callState.contactId}
+            chatId={callState.chatId}
+            direction={callState.direction}
+            callType={callState.callType}
+            onAcceptCall={() => {}}
+            onRejectCall={() => setCallState(null)}
+          />
+        )}
+      </ErrorBoundary>
     </div>
   );
 }

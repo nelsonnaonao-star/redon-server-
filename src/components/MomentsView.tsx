@@ -1,17 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Moment, UserProfile } from '../types';
 import { Plus, Camera, X, Eye, Heart, Sparkles, Check, Info, Smile, Trash2 } from 'lucide-react';
-import { MediaEditor } from './MediaEditor';
+import { MediaEditor, AnimMeta } from './MediaEditor';
+import { MomentsSkeleton } from './Skeleton';
 import { api } from '../services/api';
+import { supabase } from '../lib/supabase';
 
 interface MomentsViewProps {
   profile: UserProfile;
   moments: Moment[];
   onAddMoment: (newMoment: Moment) => void;
   userId: string;
+  isLoading?: boolean;
 }
 
-export default function MomentsView({ profile, moments, onAddMoment, userId }: MomentsViewProps) {
+export default function MomentsView({ profile, moments, onAddMoment, userId, isLoading }: MomentsViewProps) {
   const [localMoments, setLocalMoments] = useState<Moment[]>(moments);
   const [activeMoment, setActiveMoment] = useState<Moment | null>(null);
   const [isAddingMoment, setIsAddingMoment] = useState(false);
@@ -19,6 +22,9 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
   const [uploadedMedia, setUploadedMedia] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<'image' | 'video' | null>(null);
   const [showToast, setShowToast] = useState(false);
+
+  // Keep the File reference for Storage upload (avoids oversized base64 rows)
+  const editedFileRef = useRef<File | null>(null);
 
   // Long-press delete state
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
@@ -28,6 +34,7 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
   const [isEditing, setIsEditing] = useState(false);
   const [pickedFile, setPickedFile] = useState<File | null>(null);
   const [selectedFileForEdit, setSelectedFileForEdit] = useState<File | null>(null);
+  const [pendingAnimMeta, setPendingAnimMeta] = useState<AnimMeta | null>(null);
 
   // Reactions state
   const [myReaction, setMyReaction] = useState<string | null>(null);
@@ -196,8 +203,10 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
     }
   };
 
-  const handleFinishedEdit = (editedFile: File, caption: string) => {
+  const handleFinishedEdit = (editedFile: File, caption: string, animMeta?: AnimMeta) => {
     setPickedFile(editedFile);
+    editedFileRef.current = editedFile;
+    setPendingAnimMeta(animMeta || null);
     const isVid = editedFile.type.startsWith('video/');
     setMediaType(isVid ? 'video' : 'image');
 
@@ -217,15 +226,26 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
     setSelectedFileForEdit(null);
   };
 
-  const handlePostMoment = (e: React.FormEvent) => {
+  const handlePostMoment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!captionText.trim()) return;
 
-    // Use uploaded base64 data, or pick a random cool Unsplash photo
+    // Upload to Supabase Storage (avoids oversized base64 rows that cause 400)
     let momentImage = '';
-    if (uploadedMedia) {
-      momentImage = uploadedMedia;
-    } else {
+    if (editedFileRef.current) {
+      try {
+        const file = editedFileRef.current;
+        const fileName = `moment-${userId}-${Date.now()}.jpg`;
+        const { error: uploadError } = await supabase.storage
+          .from('voice-notes')
+          .upload(fileName, file, { contentType: 'image/jpeg', upsert: false });
+        if (!uploadError) {
+          const { data: publicUrlData } = supabase.storage.from('voice-notes').getPublicUrl(fileName);
+          momentImage = publicUrlData.publicUrl;
+        }
+      } catch {}
+    }
+    if (!momentImage) {
       const randomPixNum = Math.floor(Math.random() * 200) + 100;
       momentImage = `https://picsum.photos/id/${randomPixNum}/600/805`;
     }
@@ -239,6 +259,17 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
       image: momentImage,
       caption: captionText.trim(),
       profileId: userId,
+      animMeta: pendingAnimMeta ? {
+        textContent: pendingAnimMeta.textContent,
+        textAnimation: pendingAnimMeta.textAnimation,
+        textAnimationSpeed: pendingAnimMeta.textAnimationSpeed,
+        textFont: pendingAnimMeta.textFont,
+        textColor: pendingAnimMeta.textColor,
+        textPositionX: pendingAnimMeta.textPositionX,
+        textPositionY: pendingAnimMeta.textPositionY,
+        textBg: pendingAnimMeta.textBg,
+        activeFilter: pendingAnimMeta.activeFilter,
+      } : undefined,
     };
 
     onAddMoment(newM);
@@ -248,6 +279,8 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
     setCaptionText('');
     setUploadedMedia(null);
     setMediaType(null);
+    setPendingAnimMeta(null);
+    editedFileRef.current = null;
     
     setShowToast(true);
     setTimeout(() => {
@@ -279,11 +312,11 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
         </div>
 
         {/* Central interactive body */}
-        <div className="flex-1 my-6 relative rounded-3xl overflow-hidden bg-black/40 border border-white/10 flex items-center justify-center shadow-2xl">
+        <div className="flex-1 my-4 relative rounded-3xl overflow-hidden bg-black border border-white/10 flex items-center justify-center shadow-2xl max-h-[75vh]">
           {mediaType === 'video' ? (
             <video 
               src={uploadedMedia} 
-              className="w-full h-full object-contain max-h-[60vh] rounded-3xl"
+              className="w-full h-full object-contain rounded-3xl"
               muted 
               autoPlay 
               loop 
@@ -293,7 +326,7 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
             <img 
               src={uploadedMedia} 
               alt="Preview" 
-              className="w-full h-full object-contain max-h-[60vh] rounded-3xl"
+              className="w-full h-full object-contain rounded-3xl"
             />
           )}
 
@@ -404,6 +437,9 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
           </div>
 
           {/* List display */}
+          {isLoading ? (
+            <MomentsSkeleton />
+          ) : (<>
           <div className="divide-y divide-slate-100/70 dark:divide-slate-800/60">
             {localMoments.map((mom) => {
               const isOwn = mom.profileId === userId;
@@ -461,11 +497,16 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
             })}
           </div>
 
-          {localMoments.length === 0 && (
-            <div className="p-8 text-center text-slate-450 dark:text-slate-500 text-xs">
-              No hay momentos para mostrar en este instante. ¡Sé el primero!
+          {!isLoading && localMoments.length === 0 && (
+            <div className="p-8 text-center text-slate-400 dark:text-slate-500 flex flex-col items-center justify-center">
+              <div className="w-14 h-14 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center mb-3">
+                <Sparkles className="w-7 h-7 text-slate-300 dark:text-slate-600" />
+              </div>
+              <p className="text-sm font-medium">Sin momentos</p>
+              <p className="text-xs text-slate-400/85 dark:text-slate-500 mt-1">Agrega el primero pulsando el botón superior</p>
             </div>
           )}
+          </>)}
         </div>
       </div>
 
@@ -636,11 +677,81 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
 
           {/* Media */}
           <div className="flex-1 my-4 relative rounded-2xl overflow-hidden bg-slate-900 border border-white/5 flex items-center justify-center" onClick={e => e.stopPropagation()}>
-            {isVideo ? (
-              <video ref={viewerVideoRef} src={activeMoment.image} className="w-full h-full object-cover max-h-[500px]" autoPlay playsInline muted onEnded={goNext} onClick={handleTap} />
-            ) : (
-              <img src={activeMoment.image} alt="Story" className="w-full h-full object-cover max-h-[500px]" onClick={handleTap} />
-            )}
+            {(() => {
+              const meta = activeMoment.animMeta;
+              const tf = meta?.activeFilter && meta.activeFilter !== 'none' ? meta.activeFilter : null;
+              let filterCss = '';
+              if (tf === 'bw') filterCss = 'grayscale(100%)';
+              else if (tf === 'cinematic') filterCss = 'saturate(1.5) contrast(1.25) sepia(0.15)';
+              else if (tf === 'vivid') filterCss = 'saturate(2) brightness(1.05)';
+              else if (tf === 'warm') filterCss = 'sepia(0.3) saturate(1.1)';
+              else if (tf === 'cyber') filterCss = 'hue-rotate(60deg) saturate(1.5) contrast(1.1)';
+              else if (tf === 'rain') filterCss = 'brightness(1.05) contrast(1.1)';
+
+              const showAnimText = meta?.textContent && meta?.textAnimation && meta.textAnimation !== 'none';
+              const animClass = showAnimText ? `kinetic-text-${meta!.textAnimation}` : '';
+              const speed = meta?.textAnimationSpeed || 1;
+              let animStyle: React.CSSProperties = {};
+              if (showAnimText) {
+                const anim = meta!.textAnimation!;
+                const s = speed;
+                if (anim === 'typewriter') { animStyle = { overflow: 'hidden', whiteSpace: 'nowrap', borderRight: '2px solid currentColor', animation: `kinetic-typewriter ${1.5/s}s steps(${meta!.textContent!.length}) forwards, kinetic-blink-caret ${0.5/s}s step-end infinite` }; }
+                else if (anim === 'bounce') { animStyle = { animation: `kinetic-bounce ${0.6/s}s ease infinite` }; }
+                else if (anim === 'wave') { animStyle = { animation: `kinetic-wave ${0.8/s}s ease-in-out infinite` }; }
+                else if (anim === 'glow') { animStyle = { animation: `kinetic-glow ${1.2/s}s ease-in-out infinite` }; }
+                else if (anim === 'shake') { animStyle = { animation: `kinetic-shake ${0.3/s}s ease-in-out infinite` }; }
+                else if (anim === 'flip') { animStyle = { animation: `kinetic-flip ${0.8/s}s ease-in-out infinite`, backfaceVisibility: 'hidden' as any }; }
+                else if (anim === 'rainbow') { animStyle = { animation: `kinetic-rainbow ${2/s}s linear infinite` }; }
+                else if (anim === 'gradient') { animStyle = { background: 'linear-gradient(90deg, #ff6b6b, #feca57, #48dbfb, #ff9ff3)', backgroundSize: '300% 100%', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', animation: `kinetic-gradient ${2/s}s linear infinite` }; }
+                else if (anim === 'glitch') { animStyle = { animation: `kinetic-glitch ${0.8/s}s step-end infinite`, position: 'relative' as any }; }
+              }
+
+              return (
+                <>
+                  {isVideo ? (
+                    <video ref={viewerVideoRef} src={activeMoment.image} className="w-full h-full object-cover max-h-[500px]" autoPlay playsInline muted onEnded={goNext} onClick={handleTap} style={{ filter: filterCss }} />
+                  ) : (
+                    <img src={activeMoment.image} alt="Story" className="w-full h-full object-cover max-h-[500px]" onClick={handleTap} style={{ filter: filterCss }} />
+                  )}
+
+                  {showAnimText && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10 p-6">
+                      <div
+                        className={`px-4 py-2 text-center max-w-[220px] rounded-2xl text-xs md:text-sm leading-tight whitespace-pre-wrap select-none ${meta?.textBg !== false ? 'bg-black/85' : 'bg-transparent'} ${animClass}`}
+                        style={{
+                          position: 'absolute' as any,
+                          top: `${meta?.textPositionY ?? 40}%`,
+                          left: `${meta?.textPositionX ?? 50}%`,
+                          transform: 'translate(-50%, -50%)',
+                          fontFamily: meta?.textFont || 'sans-serif',
+                          color: meta?.textColor || '#ffffff',
+                          ...animStyle,
+                        }}
+                      >
+                        {meta!.textContent}
+                      </div>
+                    </div>
+                  )}
+
+                  {tf === 'rain' && (
+                    <RainCanvas />
+                  )}
+
+                  <style>{`
+                    @keyframes kinetic-typewriter { from { width: 0 } to { width: 100% } }
+                    @keyframes kinetic-blink-caret { 50% { border-color: transparent } }
+                    @keyframes kinetic-bounce { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-12px) } }
+                    @keyframes kinetic-wave { 0%,100% { transform: skewX(0deg) } 25% { transform: skewX(-8deg) translateY(-4px) } 75% { transform: skewX(8deg) translateY(4px) } }
+                    @keyframes kinetic-glow { 0%,100% { text-shadow: 0 0 5px currentColor, 0 0 10px currentColor } 50% { text-shadow: 0 0 20px currentColor, 0 0 40px currentColor, 0 0 60px currentColor } }
+                    @keyframes kinetic-shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-5px) rotate(-2deg) } 75% { transform: translateX(5px) rotate(2deg) } }
+                    @keyframes kinetic-flip { 0% { transform: perspective(400px) rotateY(0deg) } 50% { transform: perspective(400px) rotateY(180deg) } 100% { transform: perspective(400px) rotateY(360deg) } }
+                    @keyframes kinetic-rainbow { 0% { color: #ff6b6b } 17% { color: #feca57 } 33% { color: #48dbfb } 50% { color: #ff9ff3 } 67% { color: #54a0ff } 83% { color: #5f27cd } 100% { color: #ff6b6b } }
+                    @keyframes kinetic-glitch { 0% { transform: translate(0) } 20% { transform: translate(-3px, 2px) } 40% { transform: translate(3px, -1px) } 60% { transform: translate(-2px, -2px) } 80% { transform: translate(2px, 1px) } 100% { transform: translate(0) } }
+                  `}</style>
+                </>
+              );
+            })()}
+
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-6 text-white min-h-[100px] flex flex-col justify-end pointer-events-none">
               <p className="text-sm font-medium tracking-wide text-center leading-relaxed antialiased">{activeMoment.caption}</p>
             </div>
@@ -738,5 +849,51 @@ export default function MomentsView({ profile, moments, onAddMoment, userId }: M
       )}
 
     </div>
+  );
+}
+
+function RainCanvas() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animRef = useRef<number>(0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const parent = canvas.parentElement;
+    if (!parent) return;
+    const resize = () => { canvas.width = parent.clientWidth; canvas.height = parent.clientHeight; };
+    resize();
+    const drops: { x: number; y: number; speed: number; len: number }[] = [];
+    for (let i = 0; i < 120; i++) {
+      drops.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, speed: 4 + Math.random() * 6, len: 10 + Math.random() * 15 });
+    }
+    let running = true;
+    const animate = () => {
+      if (!running) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = 'rgba(160,190,255,0.35)';
+      ctx.lineWidth = 1.5;
+      for (const d of drops) {
+        d.y += d.speed;
+        if (d.y > canvas.height) { d.y = -d.len; d.x = Math.random() * canvas.width; }
+        ctx.beginPath();
+        ctx.moveTo(d.x, d.y);
+        ctx.lineTo(d.x - 1.5, d.y + d.len);
+        ctx.stroke();
+      }
+      animRef.current = requestAnimationFrame(animate);
+    };
+    animate();
+    window.addEventListener('resize', resize);
+    return () => { running = false; cancelAnimationFrame(animRef.current); window.removeEventListener('resize', resize); };
+  }, []);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="absolute inset-0 w-full h-full pointer-events-none z-10"
+    />
   );
 }

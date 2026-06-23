@@ -21,7 +21,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({
   const [gifQuery, setGifQuery] = useState('');
   const [gifs, setGifs] = useState<string[]>([]);
   const [gifLoading, setGifLoading] = useState(false);
-  const gifTimer = useRef<ReturnType<typeof setTimeout>>();
+  const gifTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => { getStickerPacks().then(setPacks); }, []);
 
@@ -48,17 +48,30 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({
     }, 400);
   };
 
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
   const activeStickers = packs.find(p => p.id === activePack)?.stickers || [];
 
   return (
     <motion.div
+      ref={panelRef}
       initial={{ opacity: 0, y: 10, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 10, scale: 0.95 }}
-      className="absolute bottom-full mb-2 w-[320px] bg-white dark:bg-dark-surface-secondary rounded-2xl shadow-2xl border border-border dark:border-dark-border overflow-hidden z-50"
+      className="w-[320px] max-w-[90vw] bg-white dark:bg-dark-surface-secondary rounded-2xl shadow-2xl border border-border dark:border-dark-border overflow-hidden"
     >
       {/* Tabs */}
-      <div className="flex border-b border-border dark:border-dark-border">
+      <div className="flex border-b border-border dark:border-dark-border relative">
         {([
           { id: 'emoji' as Tab, label: 'Emojis', icon: '😀' },
           { id: 'sticker' as Tab, label: 'Stickers', icon: '🎨' },
@@ -76,6 +89,13 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({
             {t.icon} {t.label}
           </button>
         ))}
+        <button
+          onClick={onClose}
+          className="absolute top-1 right-1 w-7 h-7 flex items-center justify-center rounded-full hover:bg-surface-secondary dark:hover:bg-dark-surface transition-all cursor-pointer text-text-tertiary hover:text-text-primary"
+          title="Cerrar"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       {/* Emoji tab */}

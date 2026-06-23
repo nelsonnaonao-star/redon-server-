@@ -19,6 +19,7 @@ export async function getMoments(): Promise<Moment[]> {
     image: m.image || '',
     caption: m.caption || '',
     profileId: m.user_id || '',
+    animMeta: m.anim_meta || undefined,
   }));
 }
 
@@ -33,6 +34,7 @@ export async function addMoment(moment: Omit<Moment, 'id' | 'time'>, userId: str
       has_unseen: moment.hasUnseen,
       image: moment.image,
       caption: moment.caption,
+      anim_meta: moment.animMeta || {},
     })
     .select()
     .single();

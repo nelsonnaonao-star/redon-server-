@@ -35,3 +35,5 @@ CREATE POLICY "votos_all" ON votos FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "stories_all" ON stories FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "polls_all" ON polls FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "chat_participants_all" ON chat_participants FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "momento_views_all" ON momento_views FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "momento_reactions_all" ON momento_reactions FOR ALL USING (true) WITH CHECK (true);
