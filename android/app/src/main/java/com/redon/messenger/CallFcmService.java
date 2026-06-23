@@ -44,15 +44,10 @@ public class CallFcmService extends FirebaseMessagingService {
         Log.d(TAG, "Message received: " + message.getData());
 
         String type = message.getData().get("type");
-        String delivery = message.getData().get("_delivery");
 
-        // "tray" delivery → system auto-displays the notification (FCM notification block)
-        // skip programmatic notification to avoid duplicates
-        if ("tray".equals(delivery)) {
-            Log.d(TAG, "Tray delivery, skipping programmatic notification");
-            return;
-        }
-
+        // Notification-type message: onMessageReceived fires only in foreground.
+        // In background/killed, the FCM SDK auto-displays the notification and
+        // the data payload is available as intent extras on tap.
         if ("call".equals(type)) {
             showCallNotification(message);
         } else {

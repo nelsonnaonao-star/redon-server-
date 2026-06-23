@@ -112,73 +112,36 @@ router.post('/send', async (req, res) => {
             android: { priority: 'high', ttl: 86400000 },
           };
 
-          if (isCall) {
-            // 1) Data-only → onMessageReceived fires in bg → heads-up with setFullScreenIntent
-            await admin.messaging().send({
-              ...common,
-              data: {
-                title, body,
-                badge: '1', notificationCount: '1',
-                ...(data || {}),
-                _delivery: 'heads-up',
-              },
-            }).catch(() => {});
-
-            // 2) Notification → guaranteed delivery even if app killed → system tray
-            await admin.messaging().send({
-              ...common,
+          // Single notification-type message for both calls and messages
+          // System auto-displays in background/killed; onMessageReceived fires in foreground
+          const channelId = isCall ? 'redon-calls' : 'redon-messages';
+          const tag = isCall ? `call-${data?.chatId || Date.now()}` : (data?.chatId || 'redon-message');
+          const notifBody = isCall ? (body || 'Llamada entrante...') : (body || 'Nuevo mensaje');
+          await admin.messaging().send({
+            token: t.token,
+            notification: {
+              title: title || 'RED ON',
+              body: notifBody,
+            },
+            data: {
+              title: title || 'RED ON',
+              body: notifBody,
+              badge: '1', notificationCount: '1',
+              ...(data || {}),
+            },
+            android: {
+              priority: 'high',
+              ttl: 86400000,
               notification: {
-                title: title || 'RED ON',
-                body: body || 'Llamada entrante...',
+                channel_id: channelId,
+                tag,
+                click_action: 'OPEN_APP',
+                notification_count: 1,
+                visibility: 'public',
               },
-              data: {
-                type: 'call',
-                chatId: data?.chatId || '',
-                callerId: data?.callerId || '',
-                callerName: data?.callerName || title || '',
-                callerAvatar: data?.callerAvatar || '',
-                callType: data?.callType || 'audio',
-                _delivery: 'tray',
-              },
-              android: {
-                ...common.android,
-                notification: {
-                  channel_id: 'redon-calls',
-                  tag: `call-tray-${data?.chatId || Date.now()}`,
-                  click_action: 'OPEN_APP',
-                  notification_count: 1,
-                  visibility: 'public',
-                  sound: 'default',
-                },
-              },
-            }).catch(() => {});
-            results.android++;
-          } else {
-            // Messages: single notification + data
-            await admin.messaging().send({
-              ...common,
-              data: {
-                title, body,
-                badge: '1', notificationCount: '1',
-                ...(data || {}),
-              },
-              notification: {
-                title: title || 'RED ON',
-                body: body || 'Nuevo mensaje',
-              },
-              android: {
-                ...common.android,
-                notification: {
-                  channel_id: 'redon-messages',
-                  tag: data?.chatId || 'redon-message',
-                  click_action: 'OPEN_APP',
-                  notification_count: 1,
-                  visibility: 'public',
-                },
-              },
-            }).catch(() => {});
-            results.android++;
-          }
+            },
+          }).catch(() => {});
+          results.android++;
         } catch (err) {
           console.error('[FCM-SEND] FCM error:', err.message, err.code || '');
           results.errors++;

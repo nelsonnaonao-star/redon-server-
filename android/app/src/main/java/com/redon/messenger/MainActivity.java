@@ -32,19 +32,17 @@ public class MainActivity extends BridgeActivity {
         String action = intent.getAction();
         Log.d(TAG, "Handling intent: " + action);
 
-        if ("ANSWER_CALL".equals(action)) {
+        // Check if intent carries FCM data payload (type=call or chatId)
+        String chatId = intent.getStringExtra("chatId");
+        String callerId = intent.getStringExtra("callerId");
+        String type = intent.getStringExtra("type");
+
+        if ("ANSWER_CALL".equals(action) || (callerId != null && "call".equals(type))) {
             String callerName = intent.getStringExtra("callerName");
-            String callerId = intent.getStringExtra("callerId");
             String callType = intent.getStringExtra("callType");
-            String chatId = intent.getStringExtra("chatId");
+            if (callType == null) callType = intent.getStringExtra("callType");
 
             // Bridge the call data to the JS layer via a custom event
-            Bundle data = new Bundle();
-            if (callerName != null) data.putString("callerName", callerName);
-            if (callerId != null) data.putString("callerId", callerId);
-            if (callType != null) data.putString("callType", callType);
-            if (chatId != null) data.putString("chatId", chatId);
-
             try {
                 String json = "{\"callerId\":\"" + (callerId != null ? callerId : "") +
                     "\",\"callerName\":\"" + (callerName != null ? callerName : "") +
@@ -60,8 +58,7 @@ public class MainActivity extends BridgeActivity {
             } catch (Exception e) {
                 Log.e(TAG, "Failed to trigger decline JS event", e);
             }
-        } else if ("OPEN_CHAT".equals(action)) {
-            String chatId = intent.getStringExtra("chatId");
+        } else if ("OPEN_CHAT".equals(action) || (chatId != null && "message".equals(type))) {
             if (chatId != null) {
                 try {
                     bridge.triggerWindowJSEvent("open-chat", chatId);
