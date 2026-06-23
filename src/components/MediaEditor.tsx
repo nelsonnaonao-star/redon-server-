@@ -183,6 +183,89 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(15);
 
+  // ─── Undo/Redo ────────────────────────────────────────────────
+  interface EditorSnapshot {
+    activeFilter: string; rotation: number;
+    brightness: number; contrast: number; saturation: number; isAutoEnhanced: boolean;
+    textOverlay: string; textFont: string; textColor: string;
+    textPosition: { x: number; y: number }; textBg: boolean;
+    textAnimation: string; textAnimationSpeed: number;
+    zoomLevel: number; panX: number; panY: number;
+    videoTransition: string;
+    trimStart: number; trimEnd: number; playbackSpeed: number;
+    originalVolume: number; uploadedVolume: number;
+    exportPreset: string;
+  }
+  const MAX_UNDO = 50;
+  const undoStack = useRef<EditorSnapshot[]>([]);
+  const redoStack = useRef<EditorSnapshot[]>([]);
+
+  const captureSnapshot = useCallback((): EditorSnapshot => ({
+    activeFilter, rotation, brightness, contrast, saturation, isAutoEnhanced,
+    textOverlay, textFont, textColor, textPosition: { ...textPosition }, textBg,
+    textAnimation, textAnimationSpeed,
+    zoomLevel, panX, panY,
+    videoTransition,
+    trimStart, trimEnd, playbackSpeed,
+    originalVolume, uploadedVolume,
+    exportPreset,
+  }), [activeFilter, rotation, brightness, contrast, saturation, isAutoEnhanced,
+      textOverlay, textFont, textColor, textPosition, textBg,
+      textAnimation, textAnimationSpeed,
+      zoomLevel, panX, panY, videoTransition,
+      trimStart, trimEnd, playbackSpeed,
+      originalVolume, uploadedVolume, exportPreset]);
+
+  const saveState = useCallback(() => {
+    undoStack.current.push(captureSnapshot());
+    if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
+    redoStack.current = [];
+  }, [captureSnapshot]);
+
+  const restoreSnapshot = useCallback((s: EditorSnapshot) => {
+    setActiveFilter(s.activeFilter); setRotation(s.rotation);
+    setBrightness(s.brightness); setContrast(s.contrast); setSaturation(s.saturation);
+    setIsAutoEnhanced(s.isAutoEnhanced);
+    setTextOverlay(s.textOverlay); setTextFont(s.textFont); setTextColor(s.textColor);
+    setTextPosition(s.textPosition); setTextBg(s.textBg);
+    setTextAnimation(s.textAnimation); setTextAnimationSpeed(s.textAnimationSpeed);
+    setZoomLevel(s.zoomLevel); setPanX(s.panX); setPanY(s.panY);
+    setVideoTransition(s.videoTransition);
+    setTrimStart(s.trimStart); setTrimEnd(s.trimEnd); setPlaybackSpeed(s.playbackSpeed);
+    setOriginalVolume(s.originalVolume); setUploadedVolume(s.uploadedVolume);
+    setExportPreset(s.exportPreset);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    if (undoStack.current.length === 0) return;
+    const current = captureSnapshot();
+    const prev = undoStack.current.pop()!;
+    redoStack.current.push(current);
+    restoreSnapshot(prev);
+  }, [captureSnapshot, restoreSnapshot]);
+
+  const handleRedo = useCallback(() => {
+    if (redoStack.current.length === 0) return;
+    const current = captureSnapshot();
+    const next = redoStack.current.pop()!;
+    undoStack.current.push(current);
+    restoreSnapshot(next);
+  }, [captureSnapshot, restoreSnapshot]);
+
+  // Keyboard shortcut: Ctrl+Z / Ctrl+Y
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault(); handleUndo();
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault(); handleRedo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [handleUndo, handleRedo]);
+
   // Sync video and extra audio play states
   React.useEffect(() => {
     if (videoRef.current) {
@@ -295,10 +378,12 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   if (!isOpen || !file) return null;
 
   const handleRotation = () => {
+    saveState();
     setRotation((prev) => (prev + 90) % 360);
   };
 
   const handleResetAdjustments = () => {
+    saveState();
     setBrightness(100);
     setContrast(100);
     setSaturation(100);
@@ -307,6 +392,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
 
   // Auto-Enhance preset: contrast +10% (110), saturation +15% (115), and a touch of sharpness/brightness
   const handleAutoEnhance = () => {
+    saveState();
     setBrightness(105);
     setContrast(115);
     setSaturation(125);
@@ -398,104 +484,100 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
       return renderCollageGrid();
     }
 
+    // Web Worker for offloaded filter processing
+    const worker = new Worker(
+      new URL('./MediaEditor.worker.ts', import.meta.url),
+      { type: 'module' }
+    );
+
     return new Promise((resolve) => {
       const img = new window.Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) { resolve(imgFile); return; }
-
+      img.onload = async () => {
         const w = img.naturalWidth || img.width;
         const h = img.naturalHeight || img.height;
 
-        // Allocate space for rotation
-        const rad = rotation * Math.PI / 180;
-        const cos = Math.abs(Math.cos(rad));
-        const sin = Math.abs(Math.sin(rad));
-        const rw = Math.ceil(w * cos + h * sin);
-        const rh = Math.ceil(w * sin + h * cos);
-        canvas.width = rw;
-        canvas.height = rh;
+        const imageBitmap = await createImageBitmap(img);
 
-        // Build canvas-compatible filter string (percentages → decimals)
-        const cf = (val: number) => (val / 100).toFixed(2);
-        let canvasFilter = `brightness(${cf(brightness)}) contrast(${cf(contrast)}) saturate(${cf(saturation)})`;
-        if (activeFilter === 'bw') canvasFilter += ' grayscale(1)';
-        else if (activeFilter === 'cinematic') canvasFilter += ' saturate(1.5) contrast(1.25) sepia(0.15)';
-        else if (activeFilter === 'vivid') canvasFilter += ' saturate(2) brightness(1.05)';
-        else if (activeFilter === 'warm') canvasFilter += ' sepia(0.3) saturate(1.1)';
-        else if (activeFilter === 'cyber') canvasFilter += ' hue-rotate(60deg) saturate(1.5) contrast(1.1)';
-        const isRain = activeFilter === 'rain';
+        worker.postMessage({
+          imageBitmap,
+          brightness, contrast, saturation, activeFilter,
+          rotation, zoomLevel, panX, panY,
+        }, [imageBitmap]);
 
-        ctx.filter = canvasFilter;
+        worker.onmessage = async (e) => {
+          const { blob: filteredBlob } = e.data;
+          worker.terminate();
 
-        // Draw image with rotation + zoom + pan (Ken Burns)
-        ctx.translate(canvas.width / 2, canvas.height / 2);
-        ctx.rotate(rad);
-        ctx.scale(zoomLevel, zoomLevel);
-        ctx.translate(panX, panY);
-        ctx.drawImage(img, -w / 2, -h / 2);
-        ctx.resetTransform();
+          const isRain = activeFilter === 'rain';
+          const filteredImg = await createImageBitmap(filteredBlob);
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) { resolve(imgFile); return; }
 
-        // Draw text overlay
-        if (textOverlay) {
-          const fontSize = Math.max(14, Math.min(w, h) * 0.045);
-          ctx.font = `${fontSize}px ${textFont}`;
-          ctx.fillStyle = textColor;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          // Add dark background box behind text for readability
-          const metrics = ctx.measureText(textOverlay);
-          const tw = metrics.width + 20;
-          const th = fontSize * 1.6;
-          const tx = (textPosition.x / 100) * canvas.width;
-          const ty = (textPosition.y / 100) * canvas.height;
-          if (textBg) {
-            ctx.fillStyle = 'rgba(0,0,0,0.7)';
-            ctx.roundRect?.(tx - tw / 2, ty - th / 2, tw, th, 8) ?? ctx.fillRect(tx - tw / 2, ty - th / 2, tw, th);
-            ctx.fill();
+          canvas.width = filteredImg.width;
+          canvas.height = filteredImg.height;
+
+          ctx.drawImage(filteredImg, 0, 0);
+
+          // Draw text overlay
+          if (textOverlay) {
+            const fontSize = Math.max(14, Math.min(w, h) * 0.045);
+            ctx.font = `${fontSize}px ${textFont}`;
+            ctx.fillStyle = textColor;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const metrics = ctx.measureText(textOverlay);
+            const tw = metrics.width + 20;
+            const th = fontSize * 1.6;
+            const tx = (textPosition.x / 100) * canvas.width;
+            const ty = (textPosition.y / 100) * canvas.height;
+            if (textBg) {
+              ctx.fillStyle = 'rgba(0,0,0,0.7)';
+              ctx.roundRect?.(tx - tw / 2, ty - th / 2, tw, th, 8) ?? ctx.fillRect(tx - tw / 2, ty - th / 2, tw, th);
+              ctx.fill();
+            }
+            ctx.fillStyle = textColor;
+            ctx.font = `${fontSize}px ${textFont}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(textOverlay, tx, ty);
           }
-          ctx.fillStyle = textColor;
-          ctx.font = `${fontSize}px ${textFont}`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(textOverlay, tx, ty);
-        }
 
-        // Draw stickers
-        for (const s of activeStickers) {
-          const fontSize = Math.max(24, Math.min(w, h) * 0.08);
-          ctx.font = `${fontSize}px serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(s.emoji, (s.x / 100) * canvas.width, (s.y / 100) * canvas.height);
-        }
-
-        // Rain overlay
-        if (isRain) {
-          const drops = 150;
-          const seed = Date.now() % 1000;
-          ctx.strokeStyle = 'rgba(180,200,255,0.35)';
-          ctx.lineWidth = 1.5;
-          for (let i = 0; i < drops; i++) {
-            const x = ((i * 137.5 + seed) % canvas.width);
-            const y = ((i * 271.3 + seed * 2) % canvas.height);
-            const len = 8 + (i % 12);
-            ctx.beginPath();
-            ctx.moveTo(x, y);
-            ctx.lineTo(x - 1.5, y + len);
-            ctx.stroke();
+          // Draw stickers
+          for (const s of activeStickers) {
+            const fontSize = Math.max(24, Math.min(w, h) * 0.08);
+            ctx.font = `${fontSize}px serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(s.emoji, (s.x / 100) * canvas.width, (s.y / 100) * canvas.height);
           }
-        }
 
-        const quality = 0.92;
-        canvas.toBlob((blob) => {
-          if (blob) {
-            resolve(new File([blob], 'edited_' + imgFile.name, { type: 'image/jpeg' }));
-          } else {
-            resolve(imgFile);
+          // Rain overlay
+          if (isRain) {
+            const drops = 150;
+            const seed = Date.now() % 1000;
+            ctx.strokeStyle = 'rgba(180,200,255,0.35)';
+            ctx.lineWidth = 1.5;
+            for (let i = 0; i < drops; i++) {
+              const x = ((i * 137.5 + seed) % canvas.width);
+              const y = ((i * 271.3 + seed * 2) % canvas.height);
+              const len = 8 + (i % 12);
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              ctx.lineTo(x - 1.5, y + len);
+              ctx.stroke();
+            }
           }
-        }, 'image/jpeg', quality);
+
+          const quality = 0.92;
+          canvas.toBlob((blob) => {
+            if (blob) {
+              resolve(new File([blob], 'edited_' + imgFile.name, { type: 'image/jpeg' }));
+            } else {
+              resolve(imgFile);
+            }
+          }, 'image/jpeg', quality);
+        };
       };
       img.onerror = () => resolve(imgFile);
       img.src = URL.createObjectURL(imgFile);
@@ -711,7 +793,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
 
   // Handle trimming adjustments which also seeks video in real-time
   const handleTrimStartChange = (val: number) => {
-    setTrimStart(val);
+    saveState(); setTrimStart(val);
     if (val > trimEnd) {
       setTrimEnd(val);
     }
@@ -721,7 +803,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   };
 
   const handleTrimEndChange = (val: number) => {
-    setTrimEnd(val);
+    saveState(); setTrimEnd(val);
     if (val < trimStart) {
       setTrimStart(val);
     }
@@ -756,7 +838,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
 
   // Force-restarting animation when transition is selected or toggled play
   const handleTransitionSelect = (transId: string) => {
-    setVideoTransition(transId);
+    saveState(); setVideoTransition(transId);
     setAnimationTriggerKey(prev => prev + 1);
     if (videoRef.current) {
       videoRef.current.currentTime = trimStart;
@@ -766,7 +848,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   // === AI Enhancements ===
   const handleUpscale = () => {
     if (isVideo) return;
-    setIsProcessing(true);
+    saveState(); setIsProcessing(true);
     setAiMode('upscale');
     const img = imageRef.current;
     if (!img) return;
@@ -786,45 +868,24 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     }, file.type, 0.95);
   };
 
-  const handleRemoveBackground = () => {
+  const handleRemoveBackground = async () => {
     if (isVideo) return;
     setIsProcessing(true);
     setAiMode('removebg');
-    const img = imageRef.current;
-    if (!img) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.drawImage(img, 0, 0);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-    // Sample bg color from top-left corner
-    const r0 = data[0], g0 = data[1], b0 = data[2];
-    const threshold = 60;
-    for (let i = 0; i < data.length; i += 4) {
-      const dr = data[i] - r0;
-      const dg = data[i+1] - g0;
-      const db = data[i+2] - b0;
-      const dist = Math.sqrt(dr*dr + dg*dg + db*db);
-      if (dist < threshold) {
-        data[i+3] = 0;
-      }
+    try {
+      const { removeBackground } = await import('@imgly/background-removal');
+      const blob = await removeBackground(fileUrl);
+      const newFile = new File([blob], 'nobg_' + file.name, { type: 'image/png' });
+      setProcessedFile(newFile);
+    } catch (err) {
+      console.error('Background removal failed:', err);
     }
-    ctx.putImageData(imageData, 0, 0);
-    canvas.toBlob((blob) => {
-      if (blob) {
-        const newFile = new File([blob], 'nobg_' + file.name, { type: 'image/png' });
-        setProcessedFile(newFile);
-      }
-      setIsProcessing(false);
-    }, 'image/png');
+    setIsProcessing(false);
   };
 
   const handleExpandCanvas = () => {
     if (isVideo) return;
-    setIsProcessing(true);
+    saveState(); setIsProcessing(true);
     setAiMode('expand');
     const img = imageRef.current;
     if (!img) return;
@@ -939,7 +1000,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   };
 
   // Reusable content block (image/video + text + stickers)
-  const contentBlock = (
+  const contentBlock = useMemo(() => (
     <div
       key={`${videoTransition}-${animationTriggerKey}`}
       className="relative transition-all duration-300 overflow-hidden bg-black/40"
@@ -1094,7 +1155,16 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                 </motion.div>
               ))}
             </div>
-          );
+          ), [videoTransition, animationTriggerKey, rotation, zoomLevel, panX, panY,
+              getTransitionStyle, collageImages.length, collageLayout, collageUrls,
+              getCollageMaxImages, isVideo, fileUrl, filterStyle,
+              isVideoMuted, uploadedAudioUrl, isPlay, playbackSpeed,
+              textOverlay, textPosition, textBg, getTextAnimationClass,
+              textFont, textColor, getTextAnimationStyle,
+              activeFilter, rainCanvasRef, activeStickers,
+              imageRef, videoRef, audioRef,
+              handleVideoLoadedMetadata, handleVideoTimeUpdate,
+              setIsPlay, setIsVideoMuted, setTextPosition, handleRemoveSticker]);
 
   // Bottom bar shared by image and video — extracted for guaranteed identical rendering
   const renderBottomBar = () => (
@@ -1365,8 +1435,32 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
         <Check className="w-4 h-4" />
       </motion.button>
 
-      {/* Floating right sidebar: Auto-Mejora + Preview Eye */}
+      {/* Floating right sidebar: Undo/Redo + Auto-Mejora + Preview */}
       <div className="absolute right-4 top-20 z-50 flex flex-col gap-3">
+        <motion.button
+          whileTap={{ scale: 0.9 }}
+          onClick={handleUndo}
+          className={`p-2.5 rounded-full backdrop-blur-sm border transition-all cursor-pointer shadow-lg ${
+            undoStack.current.length > 0
+              ? 'bg-white/10 border-white/20 text-white'
+              : 'bg-black/20 border-white/5 text-white/30'
+          }`}
+          title="Deshacer (Ctrl+Z)"
+        >
+          <RefreshCw className="w-4 h-4" />
+        </motion.button>
+        <motion.button
+          whileTap={{ scale: 0.9 }}
+          onClick={handleRedo}
+          className={`p-2.5 rounded-full backdrop-blur-sm border transition-all cursor-pointer shadow-lg ${
+            redoStack.current.length > 0
+              ? 'bg-white/10 border-white/20 text-white'
+              : 'bg-black/20 border-white/5 text-white/30'
+          }`}
+          title="Rehacer (Ctrl+Y)"
+        >
+          <RefreshCw className="w-4 h-4 scale-x-[-1]" />
+        </motion.button>
         <motion.button
           whileTap={{ scale: 0.9 }}
           onClick={handleAutoEnhance}
@@ -1416,7 +1510,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                   {FILTERS.map((f) => (
                     <button
                       key={f.id}
-                      onClick={() => setActiveFilter(f.id)}
+                      onClick={() => { saveState(); setActiveFilter(f.id); }}
                       className={`shrink-0 text-[11px] font-bold px-3.5 py-2 rounded-lg border transition-all cursor-pointer ${
                         activeFilter === f.id 
                           ? 'border-brand bg-brand/20 text-brand' 
@@ -1448,6 +1542,8 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                         max="200"
                         value={brightness}
                         onChange={(e) => setBrightness(parseInt(e.target.value))}
+                        onMouseUp={saveState}
+                        onTouchEnd={saveState}
                         className="flex-1 accent-brand bg-white/10 h-1 rounded-full appearance-none cursor-pointer"
                       />
                       <span className="w-8 text-right font-mono text-brand">{brightness}%</span>
@@ -1462,6 +1558,8 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                         max="200"
                         value={contrast}
                         onChange={(e) => setContrast(parseInt(e.target.value))}
+                        onMouseUp={saveState}
+                        onTouchEnd={saveState}
                         className="flex-1 accent-brand bg-white/10 h-1 rounded-full appearance-none cursor-pointer"
                       />
                       <span className="w-8 text-right font-mono text-brand">{contrast}%</span>
@@ -1476,6 +1574,8 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                         max="200"
                         value={saturation}
                         onChange={(e) => setSaturation(parseInt(e.target.value))}
+                        onMouseUp={saveState}
+                        onTouchEnd={saveState}
                         className="flex-1 accent-brand bg-white/10 h-1 rounded-full appearance-none cursor-pointer"
                       />
                       <span className="w-8 text-right font-mono text-brand">{saturation}%</span>
@@ -1916,7 +2016,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                     {TEXT_ANIMATIONS.map((anim) => (
                       <button
                         key={anim.id}
-                        onClick={() => setTextAnimation(anim.id)}
+                        onClick={() => { saveState(); setTextAnimation(anim.id); }}
                         className={`text-[9px] font-bold py-1.5 px-1.5 rounded-lg border transition-all ${
                           textAnimation === anim.id ? 'border-violet-400 bg-violet-400/20 text-violet-200' : 'border-white/5 bg-white/5 text-white/70 hover:bg-white/10'
                         }`}
@@ -1962,7 +2062,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                         {[0.25, 0.5, 1, 1.5, 2, 4].map((s) => (
                           <button
                             key={s}
-                            onClick={() => setPlaybackSpeed(s)}
+                            onClick={() => { saveState(); setPlaybackSpeed(s); }}
                             className={`text-[10px] font-bold py-1.5 rounded-lg border transition-all ${
                               playbackSpeed === s 
                                 ? 'border-yellow-400 bg-yellow-400/20 text-yellow-200' 
@@ -1984,7 +2084,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                         <span>Zoom / Ken Burns</span>
                       </span>
                       <button
-                        onClick={() => { setZoomLevel(1); setPanX(0); setPanY(0); }}
+                        onClick={() => { saveState(); setZoomLevel(1); setPanX(0); setPanY(0); }}
                         className="text-[9px] text-rose-400 hover:text-white px-2 py-0.5 rounded bg-rose-500/10"
                       >
                         Restablecer
@@ -1998,7 +2098,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                         max="3"
                         step="0.05"
                         value={zoomLevel}
-                        onChange={(e) => setZoomLevel(parseFloat(e.target.value))}
+                        onChange={(e) => { saveState(); setZoomLevel(parseFloat(e.target.value)); }}
                         className="flex-1 accent-cyan-500 bg-white/10 h-1 rounded-full appearance-none cursor-pointer"
                       />
                       <span className="text-[9px] font-mono text-cyan-300 w-10 text-right">{zoomLevel.toFixed(2)}x</span>
@@ -2013,7 +2113,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                             max="200"
                             step="1"
                             value={panX}
-                            onChange={(e) => setPanX(parseInt(e.target.value))}
+                            onChange={(e) => { saveState(); setPanX(parseInt(e.target.value)); }}
                             className="flex-1 accent-cyan-500 bg-white/10 h-1 rounded-full appearance-none cursor-pointer"
                           />
                         </div>
@@ -2025,7 +2125,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                             max="200"
                             step="1"
                             value={panY}
-                            onChange={(e) => setPanY(parseInt(e.target.value))}
+                            onChange={(e) => { saveState(); setPanY(parseInt(e.target.value)); }}
                             className="flex-1 accent-cyan-500 bg-white/10 h-1 rounded-full appearance-none cursor-pointer"
                           />
                         </div>
@@ -2051,7 +2151,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                     {EXPORT_PRESETS.map((p) => (
                       <button
                         key={p.id}
-                        onClick={() => setExportPreset(p.id)}
+                        onClick={() => { saveState(); setExportPreset(p.id); }}
                         className={`text-[10px] font-bold py-2 px-2 rounded-xl border transition-all text-left ${
                           exportPreset === p.id
                             ? 'border-emerald-500 bg-emerald-500/20 text-emerald-300'
