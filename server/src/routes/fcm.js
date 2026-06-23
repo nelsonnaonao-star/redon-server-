@@ -21,7 +21,8 @@ let firebaseAdmin = null;
 async function initFirebaseAdmin() {
   if (firebaseAdmin) return firebaseAdmin;
   try {
-    const admin = await import('firebase-admin');
+    const mod = await import('firebase-admin');
+    const admin = mod.default || mod;
     if (!admin.apps?.length) {
       let credentials = null;
 
@@ -95,7 +96,7 @@ router.post('/register', async (req, res) => {
       .from('push_tokens')
       .upsert(
         { profile_id, token: tokenStr, device: device || 'android-fcm' },
-        { onConflict: 'profile_id,token', ignoreDuplicates: false }
+        { onConflict: 'profile_id,token' }
       );
     if (error) {
       console.warn('[FCM] Register error:', error.message);

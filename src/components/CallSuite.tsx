@@ -304,8 +304,27 @@ export const CallSuite: React.FC<CallSuiteProps> = ({
         }
       };
 
+      // Wait for remote offer if not yet received
       if (pendingOfferRef.current) {
         await pc.setRemoteDescription(new RTCSessionDescription(pendingOfferRef.current));
+      } else if (pc.signalingState !== 'have-remote-offer') {
+        await new Promise<void>((resolve, reject) => {
+          const check = setInterval(() => {
+            if (pendingOfferRef.current) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 50);
+          setTimeout(() => {
+            clearInterval(check);
+            reject(new Error('Tiempo de espera agotado esperando oferta remota'));
+          }, 10000);
+        });
+        await pc.setRemoteDescription(new RTCSessionDescription(pendingOfferRef.current));
+      }
+
+      if (pc.signalingState !== 'have-remote-offer') {
+        throw new Error('Estado de señalización inválido: ' + pc.signalingState);
       }
 
       const answer = await pc.createAnswer();
@@ -399,13 +418,17 @@ export const CallSuite: React.FC<CallSuiteProps> = ({
           if (offerTimeoutRef.current) clearTimeout(offerTimeoutRef.current);
         });
 
-        channel.on('broadcast', { event: 'answer' }, (payload: any) => {
+        channel.on('broadcast', { event: 'answer' }, async (payload: any) => {
           if (payload.payload.userId !== contactId) return;
-          pc.setRemoteDescription(new RTCSessionDescription(payload.payload.sdp)).catch(() => {});
-          for (const c of iceCandidatesQueue.current) {
-            pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.payload.sdp));
+            for (const c of iceCandidatesQueue.current) {
+              await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+            }
+            iceCandidatesQueue.current = [];
+          } catch (err) {
+            console.warn('Failed to set remote description:', err);
           }
-          iceCandidatesQueue.current = [];
         });
 
         channel.on('broadcast', { event: 'ice-candidate' }, (payload: any) => {

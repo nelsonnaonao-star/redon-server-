@@ -19,6 +19,8 @@ async function main() {
 
   const app = express();
 
+  app.set('trust proxy', 1); // Render trusted proxy for rate-limiter
+
   const staticOrigins = [
     'http://localhost:5173',
     'http://localhost:5000',
