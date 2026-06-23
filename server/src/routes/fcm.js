@@ -1,8 +1,7 @@
 import express from 'express';
 import webpush from 'web-push';
 import { createClient } from '@supabase/supabase-js';
-import { initializeApp, apps } from 'firebase-admin';
-import { cert } from 'firebase-admin/credential';
+import { initializeApp, getApps, cert } from 'firebase-admin';
 import { getMessaging } from 'firebase-admin/messaging';
 
 const router = express.Router();
@@ -28,7 +27,7 @@ try {
     console.error("❌ Error al parsear FIREBASE_SERVICE_ACCOUNT:", e.message);
 }
 
-if (serviceAccount && apps.length === 0) {
+if (serviceAccount && getApps().length === 0) {
     try {
         initializeApp({
             credential: cert(serviceAccount)
@@ -40,7 +39,7 @@ if (serviceAccount && apps.length === 0) {
 }
 
 function initFirebaseAdmin() {
-  if (apps.length === 0) return null;
+  if (getApps().length === 0) return null;
   return { messaging: getMessaging };
 }
 
