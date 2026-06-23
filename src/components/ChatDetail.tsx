@@ -868,7 +868,15 @@ export default function ChatDetail({
                   <button 
                     type="button"
                     onClick={() => {
-                      setSelectedFileForEdit(new File([""], "camara_mock.jpg", { type: "image/jpeg" }));
+                      const selectEl = document.createElement('input');
+                      selectEl.type = 'file';
+                      selectEl.accept = 'image/*';
+                      selectEl.capture = 'environment';
+                      selectEl.onchange = (e) => {
+                        const file = (e.target as HTMLInputElement).files?.[0];
+                        if (file) setSelectedFileForEdit(file);
+                      };
+                      selectEl.click();
                       setShowAttachMenu(false);
                     }}
                     className="flex flex-col items-center gap-1 group focus:outline-none"
@@ -883,7 +891,15 @@ export default function ChatDetail({
                   <button 
                     type="button"
                     onClick={() => {
-                      setSelectedFileForEdit(new File([""], "clip_sunset.mp4", { type: "video/mp4" }));
+                      const selectEl = document.createElement('input');
+                      selectEl.type = 'file';
+                      selectEl.accept = 'video/*';
+                      selectEl.capture = 'environment';
+                      selectEl.onchange = (e) => {
+                        const file = (e.target as HTMLInputElement).files?.[0];
+                        if (file) setSelectedFileForEdit(file);
+                      };
+                      selectEl.click();
                       setShowAttachMenu(false);
                     }}
                     className="flex flex-col items-center gap-1 group focus:outline-none"

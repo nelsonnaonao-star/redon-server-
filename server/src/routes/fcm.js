@@ -125,13 +125,15 @@ router.post('/send', async (req, res) => {
             android: {
               priority: 'high',
               ttl: 86400000,
-              notification: {
-                channel_id: isCall ? 'redon-calls' : 'redon-messages',
-                tag: data?.chatId || 'redon-message',
-                click_action: 'OPEN_APP',
-                notification_count: 1,
-                visibility: 'public',
-              },
+              ...(!isCall ? {
+                notification: {
+                  channel_id: 'redon-messages',
+                  tag: data?.chatId || 'redon-message',
+                  click_action: 'OPEN_APP',
+                  notification_count: 1,
+                  visibility: 'public',
+                },
+              } : {}),
             },
           };
           const resp = await admin.messaging().send(message);

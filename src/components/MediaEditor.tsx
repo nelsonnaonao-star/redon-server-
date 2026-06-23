@@ -14,6 +14,7 @@ export interface AnimMeta {
   textAnimation: string;
   textAnimationSpeed: number;
   textFont: string;
+  textFontSize: number;
   textColor: string;
   textPositionX: number;
   textPositionY: number;
@@ -71,7 +72,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   onSave
 }) => {
   // Main Panel Navigation
-  const [activeSubPanel, setActiveSubPanel] = useState<'none' | 'filters' | 'adjusts' | 'text' | 'trim' | 'audio' | 'musiclib' | 'transitions' | 'ai' | 'stickers' | 'collage' | 'kinetic' | 'transform' | 'export'>('none');
+  const [activeSubPanel, setActiveSubPanel] = useState<'none' | 'filters' | 'adjusts' | 'text' | 'trim' | 'audio' | 'musiclib' | 'transitions' | 'ai' | 'stickers' | 'collage' | 'kinetic' | 'transform' | 'export' | 'crop' | 'emprende'>('none');
   
   // Custom states for active pro filters and sliders
   const [activeFilter, setActiveFilter] = useState('none');
@@ -88,6 +89,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   const [textColor, setTextColor] = useState('#ffffff');
   const [textPosition, setTextPosition] = useState({ x: 50, y: 40 });
   const [textBg, setTextBg] = useState(true);
+  const [fontSize, setFontSize] = useState(48);
   
   // Audio Layering (Video only)
   const [uploadedAudioUrl, setUploadedAudioUrl] = useState<string | null>(null);
@@ -125,6 +127,10 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
 
   // Variable playback speed (video only)
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+
+  // Crop
+  const [crop, setCrop] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [cropAspect, setCropAspect] = useState<string>('free');
 
   // Export resolution
   const [exportPreset, setExportPreset] = useState('original');
@@ -188,13 +194,14 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     activeFilter: string; rotation: number;
     brightness: number; contrast: number; saturation: number; isAutoEnhanced: boolean;
     textOverlay: string; textFont: string; textColor: string;
-    textPosition: { x: number; y: number }; textBg: boolean;
+    textPosition: { x: number; y: number }; textBg: boolean; fontSize: number;
     textAnimation: string; textAnimationSpeed: number;
     zoomLevel: number; panX: number; panY: number;
     videoTransition: string;
     trimStart: number; trimEnd: number; playbackSpeed: number;
     originalVolume: number; uploadedVolume: number;
     exportPreset: string;
+    crop: { x: number; y: number; w: number; h: number } | null;
   }
   const MAX_UNDO = 50;
   const undoStack = useRef<EditorSnapshot[]>([]);
@@ -202,19 +209,19 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
 
   const captureSnapshot = useCallback((): EditorSnapshot => ({
     activeFilter, rotation, brightness, contrast, saturation, isAutoEnhanced,
-    textOverlay, textFont, textColor, textPosition: { ...textPosition }, textBg,
+    textOverlay, textFont, textColor, textPosition: { ...textPosition }, textBg, fontSize,
     textAnimation, textAnimationSpeed,
     zoomLevel, panX, panY,
     videoTransition,
     trimStart, trimEnd, playbackSpeed,
     originalVolume, uploadedVolume,
-    exportPreset,
+    exportPreset, crop,
   }), [activeFilter, rotation, brightness, contrast, saturation, isAutoEnhanced,
-      textOverlay, textFont, textColor, textPosition, textBg,
+      textOverlay, textFont, textColor, textPosition, textBg, fontSize,
       textAnimation, textAnimationSpeed,
       zoomLevel, panX, panY, videoTransition,
       trimStart, trimEnd, playbackSpeed,
-      originalVolume, uploadedVolume, exportPreset]);
+      originalVolume, uploadedVolume, exportPreset, crop]);
 
   const saveState = useCallback(() => {
     undoStack.current.push(captureSnapshot());
@@ -227,13 +234,14 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     setBrightness(s.brightness); setContrast(s.contrast); setSaturation(s.saturation);
     setIsAutoEnhanced(s.isAutoEnhanced);
     setTextOverlay(s.textOverlay); setTextFont(s.textFont); setTextColor(s.textColor);
-    setTextPosition(s.textPosition); setTextBg(s.textBg);
+    setTextPosition(s.textPosition); setTextBg(s.textBg); setFontSize(s.fontSize);
     setTextAnimation(s.textAnimation); setTextAnimationSpeed(s.textAnimationSpeed);
     setZoomLevel(s.zoomLevel); setPanX(s.panX); setPanY(s.panY);
     setVideoTransition(s.videoTransition);
     setTrimStart(s.trimStart); setTrimEnd(s.trimEnd); setPlaybackSpeed(s.playbackSpeed);
     setOriginalVolume(s.originalVolume); setUploadedVolume(s.uploadedVolume);
     setExportPreset(s.exportPreset);
+    setCrop(s.crop);
   }, []);
 
   const handleUndo = useCallback(() => {
@@ -346,24 +354,32 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     () => effectiveFile?.type?.startsWith('video/') ?? false,
     [effectiveFile]
   );
-  const fileUrl = useMemo(() => {
-    if (!effectiveFile) return '';
-    if (effectiveFile.size > 0) {
-      return URL.createObjectURL(effectiveFile);
-    }
-    return isVideo
-      ? 'https://assets.mixkit.co/videos/preview/mixkit-forest-stream-in-the-sunlight-529-large.mp4'
-      : 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800&q=80';
-  }, [effectiveFile, isVideo]);
+  const [fileUrl, setFileUrl] = useState('');
 
-  // Revoke old blob URL when fileUrl changes or on unmount
+  // Read file as ArrayBuffer first for Android content:// URI compatibility
   useEffect(() => {
-    return () => {
-      if (fileUrl && fileUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(fileUrl);
-      }
+    if (!effectiveFile || effectiveFile.size === 0) {
+      setFileUrl('');
+      return;
+    }
+    let cancelled = false;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (cancelled) return;
+      const blob = new Blob([reader.result as ArrayBuffer], { type: effectiveFile.type });
+      const url = URL.createObjectURL(blob);
+      setFileUrl(url);
     };
-  }, [fileUrl]);
+    reader.onerror = () => {
+      if (cancelled) return;
+      setFileUrl(URL.createObjectURL(effectiveFile));
+    };
+    reader.readAsArrayBuffer(effectiveFile);
+    return () => { cancelled = true; if (fileUrl?.startsWith('blob:')) URL.revokeObjectURL(fileUrl); };
+  }, [effectiveFile]);
+
+  // Fallback placeholder when no file or empty mock file
+  const showPlaceholder = !effectiveFile || effectiveFile.size === 0;
 
   // Track whether the video is muted (needed for autoplay on mobile)
   const [isVideoMuted, setIsVideoMuted] = useState(true);
@@ -514,21 +530,33 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
           const ctx = canvas.getContext('2d');
           if (!ctx) { resolve(imgFile); return; }
 
-          canvas.width = filteredImg.width;
-          canvas.height = filteredImg.height;
+          const imgW = filteredImg.width;
+          const imgH = filteredImg.height;
 
-          ctx.drawImage(filteredImg, 0, 0);
+          if (crop) {
+            const sx = (crop.x / 100) * imgW;
+            const sy = (crop.y / 100) * imgH;
+            const sw = (crop.w / 100) * imgW;
+            const sh = (crop.h / 100) * imgH;
+            canvas.width = sw;
+            canvas.height = sh;
+            ctx.drawImage(filteredImg, sx, sy, sw, sh, 0, 0, sw, sh);
+          } else {
+            canvas.width = imgW;
+            canvas.height = imgH;
+            ctx.drawImage(filteredImg, 0, 0);
+          }
 
           // Draw text overlay
           if (textOverlay) {
-            const fontSize = Math.max(14, Math.min(w, h) * 0.045);
-            ctx.font = `${fontSize}px ${textFont}`;
+            const fontSizePx = Math.max(14, Math.min(w, h) * 0.045, fontSize);
+            ctx.font = `${fontSizePx}px ${textFont}`;
             ctx.fillStyle = textColor;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             const metrics = ctx.measureText(textOverlay);
             const tw = metrics.width + 20;
-            const th = fontSize * 1.6;
+            const th = fontSizePx * 1.6;
             const tx = (textPosition.x / 100) * canvas.width;
             const ty = (textPosition.y / 100) * canvas.height;
             if (textBg) {
@@ -537,7 +565,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
               ctx.fill();
             }
             ctx.fillStyle = textColor;
-            ctx.font = `${fontSize}px ${textFont}`;
+            ctx.font = `${fontSizePx}px ${textFont}`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(textOverlay, tx, ty);
@@ -687,13 +715,13 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
 
           // Draw text overlay
           if (textOverlay) {
-            const fontSize = Math.max(14, Math.min(targetW, targetH) * 0.045);
-            ctx.font = `${fontSize}px ${textFont}`;
+            const fontSizePx = Math.max(14, Math.min(targetW, targetH) * 0.045, fontSize);
+            ctx.font = `${fontSizePx}px ${textFont}`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             const metrics = ctx.measureText(textOverlay);
             const tw = metrics.width + 20;
-            const th = fontSize * 1.6;
+            const th = fontSizePx * 1.6;
             const tx = (textPosition.x / 100) * canvas.width;
             const ty = (textPosition.y / 100) * canvas.height;
             if (textBg) {
@@ -702,7 +730,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
               ctx.fill();
             }
             ctx.fillStyle = textColor;
-            ctx.font = `${fontSize}px ${textFont}`;
+            ctx.font = `${fontSizePx}px ${textFont}`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(textOverlay, tx, ty);
@@ -773,6 +801,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
       textAnimation: textAnimation,
       textAnimationSpeed: textAnimationSpeed,
       textFont: textFont,
+      textFontSize: fontSize,
       textColor: textColor,
       textPositionX: textPosition.x,
       textPositionY: textPosition.y,
@@ -1009,7 +1038,12 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
         ...getTransitionStyle()
       }}
     >
-      {collageImages.length > 0 ? (
+      {showPlaceholder && collageImages.length === 0 ? (
+        <div className="flex flex-col items-center justify-center w-full h-full text-white/30 gap-2">
+          <Image className="w-12 h-12 opacity-20" />
+          <span className="text-xs">Selecciona una imagen o video para editar</span>
+        </div>
+      ) : collageImages.length > 0 ? (
         <div className={`grid gap-0.5 p-0.5 w-full min-h-[40vh] ${collageLayout === '2grid' ? 'grid-cols-2' : 'grid-cols-2'}`}>
           {collageUrls.slice(0, getCollageMaxImages()).map((url, i) => (
             <img
@@ -1021,20 +1055,23 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
           ))}
         </div>
       ) : !isVideo ? (
-                <img
-                  ref={imageRef}
-                  src={fileUrl}
-                  alt="Preview to Edit"
-                  className="max-h-full w-full object-contain transition-all duration-300"
-                  style={{
-                    filter: filterStyle
-                  }}
-                />
+                <div className="relative w-full h-full flex items-center justify-center">
+                  <img
+                    ref={imageRef}
+                    src={fileUrl || ''}
+                    alt="Preview to Edit"
+                    className="max-h-full w-full object-contain transition-all duration-300"
+                    style={{
+                      filter: filterStyle
+                    }}
+                  />
+                  {crop && <CropOverlay crop={crop} setCrop={setCrop} cropAspect={cropAspect} saveState={saveState} />}
+                </div>
               ) : (
                 <div className="relative w-full h-full bg-black flex items-center justify-center">
                   <video 
                     ref={videoRef}
-                    src={fileUrl} 
+                    src={fileUrl || ''} 
                     className="w-full h-full object-contain"
                     autoPlay
                     muted={isVideoMuted}
@@ -1100,13 +1137,15 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                 <motion.div 
                   drag
                   dragMomentum={false}
-                  className={`absolute px-4 py-2 border border-white/20 select-none shadow-2xl text-xs md:text-sm text-center max-w-[220px] rounded-2xl cursor-move whitespace-pre-wrap leading-tight ${textBg ? 'bg-black/85' : 'bg-transparent'} ${getTextAnimationClass()}`}
+                  className={`absolute px-4 py-2 border border-white/20 select-none shadow-2xl text-center rounded-2xl cursor-move whitespace-pre-wrap leading-tight ${textBg ? 'bg-black/85' : 'bg-transparent'} ${getTextAnimationClass()}`}
                   style={{ 
                     top: `${textPosition.y}%`, 
                     left: `${textPosition.x}%`,
                     transform: 'translate(-50%, -50%)',
                     fontFamily: textFont,
                     color: textColor,
+                    fontSize: `${fontSize}px`,
+                    maxWidth: `${Math.max(80, fontSize * 4)}px`,
                     ...getTextAnimationStyle(),
                   }}
                   onDrag={(_, info) => {
@@ -1213,6 +1252,20 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
           <Type className="w-6 h-6 text-white" />
         </button>
 
+        {/* Crop toggle */}
+        <button
+          onClick={() => {
+            if (activeSubPanel !== 'crop' && !crop) { saveState(); setCrop({ x: 5, y: 5, w: 90, h: 90 }); }
+            setActiveSubPanel(prev => prev === 'crop' ? 'none' : 'crop');
+          }}
+          className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+            activeSubPanel === 'crop' ? 'bg-brand shadow-lg scale-110' : 'hover:bg-white/10'
+          }`}
+          title="Recortar imagen"
+        >
+          <Crop className="w-6 h-6 text-white" />
+        </button>
+
         {/* Trimmer toggle if video */}
         {isVideo && (
           <button
@@ -1316,6 +1369,17 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
 
         {/* Separator */}
         <div className="w-px h-6 bg-white/20 flex-shrink-0 snap-center min-w-[8px]" />
+
+        {/* Emprende Rápido — Business Templates */}
+        <button
+          onClick={() => setActiveSubPanel(prev => prev === 'emprende' ? 'none' : 'emprende')}
+          className={`flex-shrink-0 snap-center min-w-[56px] h-12 flex flex-col items-center justify-center text-white active:scale-95 transition-transform rounded-full cursor-pointer ${
+            activeSubPanel === 'emprende' ? 'bg-amber-500 shadow-lg scale-110' : 'hover:bg-white/10'
+          }`}
+          title="Plantillas Emprende Rápido"
+        >
+          <Diamond className="w-6 h-6 text-white" />
+        </button>
 
         {/* Export Resolution */}
         <button
@@ -1664,6 +1728,20 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                       />
                       <span className="text-[9px] font-mono select-all uppercase text-white/85">{textColor}</span>
                     </div>
+                  </div>
+
+                  {/* Row 3: Font size slider */}
+                  <div className="flex items-center gap-2 border-t border-white/5 pt-2">
+                    <span className="text-[10px] text-white/50 font-semibold">Tamaño:</span>
+                    <input
+                      type="range"
+                      min="12"
+                      max="120"
+                      value={fontSize}
+                      onChange={(e) => setFontSize(Number(e.target.value))}
+                      className="flex-1 h-1 accent-cyan-400 cursor-pointer"
+                    />
+                    <span className="text-[10px] font-mono text-white/70 min-w-[28px] text-right">{fontSize}px</span>
                   </div>
                 </motion.div>
               )}
@@ -2163,6 +2241,187 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                 </motion.div>
               )}
 
+              {/* EMPRENDE RÁPIDO */}
+              {activeSubPanel === 'emprende' && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="absolute bottom-0 w-full bg-black/95 backdrop-blur-md border border-white/10 p-3 rounded-2xl"
+                >
+                  <div className="text-[10px] text-white/50 font-bold flex items-center gap-1.5 mb-2">
+                    <Diamond className="w-3 h-3 text-amber-400" />
+                    <span>Plantillas Emprende Rápido</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      {
+                        id: 'precio',
+                        label: 'Precio Impactante',
+                        desc: 'Precio grande + producto',
+                        icon: '$',
+                        apply: () => {
+                          saveState();
+                          setTextOverlay('$99\nProducto Premium');
+                          setTextFont('Impact, Haettenschweiler, sans-serif');
+                          setTextColor('#fbbf24');
+                          setFontSize(72);
+                          setTextPosition({ x: 50, y: 35 });
+                          setTextBg(true);
+                          setActiveSubPanel('none');
+                        },
+                      },
+                      {
+                        id: 'promo',
+                        label: 'Promoción',
+                        desc: 'Descuento + llamado',
+                        icon: '%',
+                        apply: () => {
+                          saveState();
+                          setTextOverlay('¡50% OFF!\nHasta agotar existencias');
+                          setTextFont('Georgia, serif');
+                          setTextColor('#ef4444');
+                          setFontSize(56);
+                          setTextPosition({ x: 50, y: 40 });
+                          setTextBg(true);
+                          setActiveSubPanel('none');
+                        },
+                      },
+                      {
+                        id: 'horario',
+                        label: 'Horario',
+                        desc: 'Días y horarios',
+                        icon: '🕐',
+                        apply: () => {
+                          saveState();
+                          setTextOverlay('Lun–Vie: 9AM – 6PM\nSáb: 10AM – 2PM\nDom: Cerrado');
+                          setTextFont('sans-serif');
+                          setTextColor('#ffffff');
+                          setFontSize(36);
+                          setTextPosition({ x: 50, y: 50 });
+                          setTextBg(true);
+                          setActiveSubPanel('none');
+                        },
+                      },
+                      {
+                        id: 'producto',
+                        label: 'Producto',
+                        desc: 'Nombre + descripción',
+                        icon: '🛍',
+                        apply: () => {
+                          saveState();
+                          setTextOverlay('[Nombre del Producto]\nDescripción breve y atractiva');
+                          setTextFont('Montserrat, sans-serif');
+                          setTextColor('#ffffff');
+                          setFontSize(44);
+                          setTextPosition({ x: 50, y: 50 });
+                          setTextBg(true);
+                          setActiveSubPanel('none');
+                        },
+                      },
+                      {
+                        id: 'servicio',
+                        label: 'Servicio Profesional',
+                        desc: 'Título + tagline',
+                        icon: '⭐',
+                        apply: () => {
+                          saveState();
+                          setTextOverlay('Consultoría Profesional\nResultados que importan');
+                          setTextFont('Georgia, serif');
+                          setTextColor('#93c5fd');
+                          setFontSize(48);
+                          setTextPosition({ x: 50, y: 45 });
+                          setTextBg(true);
+                          setActiveSubPanel('none');
+                        },
+                      },
+                      {
+                        id: 'lanzamiento',
+                        label: 'Lanzamiento',
+                        desc: 'Próximamente + fecha',
+                        icon: '🚀',
+                        apply: () => {
+                          saveState();
+                          setTextOverlay('PRÓXIMAMENTE\n15 de Julio, 2026');
+                          setTextFont('Impact, Haettenschweiler, sans-serif');
+                          setTextColor('#f472b6');
+                          setFontSize(52);
+                          setTextPosition({ x: 50, y: 50 });
+                          setTextBg(true);
+                          setActiveSubPanel('none');
+                        },
+                      },
+                    ].map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={t.apply}
+                        className="flex items-center gap-2 text-left p-2 rounded-lg border border-white/5 bg-white/5 hover:bg-white/10 transition-all cursor-pointer"
+                      >
+                        <span className="text-lg shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-amber-500/15 text-amber-300">{t.icon}</span>
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-bold text-white truncate">{t.label}</div>
+                          <div className="text-[9px] text-white/40 truncate">{t.desc}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+
+              {/* CROP */}
+              {activeSubPanel === 'crop' && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="absolute bottom-0 w-full bg-black/95 backdrop-blur-md border border-white/10 p-3 rounded-2xl"
+                >
+                  <div className="text-[10px] text-white/50 font-bold flex items-center gap-1.5 mb-2">
+                    <Crop className="w-3 h-3 text-cyan-400" />
+                    <span>Recortar imagen</span>
+                  </div>
+
+                  {/* Aspect ratio presets */}
+                  <div className="grid grid-cols-3 gap-1.5 mb-2">
+                    {[
+                      { id: 'free', label: 'Libre' },
+                      { id: '1:1', label: '1:1 Cuadrado' },
+                      { id: '4:5', label: '4:5 Retrato' },
+                      { id: '16:9', label: '16:9 Horizontal' },
+                      { id: '9:16', label: '9:16 Historia' },
+                      { id: '3:2', label: '3:2 Clásico' },
+                    ].map((a) => (
+                      <button
+                        key={a.id}
+                        onClick={() => setCropAspect(a.id)}
+                        className={`text-[10px] font-bold py-1.5 rounded-lg border transition-all ${
+                          cropAspect === a.id
+                            ? 'border-cyan-400 bg-cyan-400/20 text-cyan-200'
+                            : 'border-white/5 bg-white/5 text-white/70 hover:bg-white/10'
+                        }`}
+                      >
+                        {a.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { saveState(); setCrop(null); setActiveSubPanel('none'); }}
+                      className="flex-1 text-[10px] font-bold py-2 rounded-lg border border-white/10 text-white/60 hover:bg-white/10 transition-all cursor-pointer"
+                    >
+                      Sin recorte
+                    </button>
+                    <button
+                      onClick={() => setActiveSubPanel('none')}
+                      className="flex-1 text-[10px] font-bold py-2 rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 transition-all cursor-pointer"
+                    >
+                      Hecho
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
             </AnimatePresence>
           </div>
 
@@ -2173,6 +2432,145 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
       </div>
     );
   };
+
+// ─── Interactive Crop Overlay ────────────────────────────────────
+const HANDLE_SIZE = 14;
+const HANDLE_HIT = 20;
+
+function getAspectRatio(id: string): number | null {
+  const map: Record<string, number> = {
+    '1:1': 1, '4:5': 0.8, '16:9': 16/9, '9:16': 9/16, '3:2': 1.5,
+  };
+  return map[id] ?? null;
+}
+
+function clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
+
+const CropOverlay: React.FC<{
+  crop: { x: number; y: number; w: number; h: number };
+  setCrop: (c: { x: number; y: number; w: number; h: number }) => void;
+  cropAspect: string;
+  saveState: () => void;
+}> = ({ crop, setCrop, cropAspect, saveState }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ handle: string; startX: number; startY: number; crop: typeof crop } | null>(null);
+  const committedRef = useRef(false);
+
+  const getPos = useCallback((e: React.MouseEvent | MouseEvent | React.TouchEvent | TouchEvent) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    let clientX: number, clientY: number;
+    if ('touches' in e) {
+      const t = e.touches[0] ?? (e as React.TouchEvent).changedTouches[0];
+      clientX = t.clientX; clientY = t.clientY;
+    } else {
+      clientX = (e as MouseEvent).clientX;
+      clientY = (e as MouseEvent).clientY;
+    }
+    return {
+      x: clamp(((clientX - rect.left) / rect.width) * 100, 0, 100),
+      y: clamp(((clientY - rect.top) / rect.height) * 100, 0, 100),
+    };
+  }, []);
+
+  const onHandleDown = useCallback((handle: string, e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    committedRef.current = false;
+    const pos = getPos(e);
+    dragRef.current = { handle, startX: pos.x, startY: pos.y, crop: { ...crop } };
+
+    const onMove = (ev: MouseEvent | TouchEvent) => {
+      const p = getPos(ev);
+      const d = dragRef.current!;
+      const dx = p.x - d.startX;
+      const dy = p.y - d.startY;
+      let nx = d.crop.x, ny = d.crop.y, nw = d.crop.w, nh = d.crop.h;
+      const aspect = getAspectRatio(cropAspect);
+
+      if (d.handle.includes('e')) { nw = clamp(d.crop.w + dx, 5, 100 - d.crop.x); }
+      if (d.handle.includes('w')) { nw = clamp(d.crop.w - dx, 5, d.crop.x + d.crop.w); nx = d.crop.x + (d.crop.w - nw); }
+      if (d.handle.includes('s')) { nh = clamp(d.crop.h + dy, 5, 100 - d.crop.y); }
+      if (d.handle.includes('n')) { nh = clamp(d.crop.h - dy, 5, d.crop.y + d.crop.h); ny = d.crop.y + (d.crop.h - nh); }
+
+      if (aspect && d.handle.length > 1) {
+        if (d.handle === 'se' || d.handle === 'nw') { nh = nw / aspect; if (ny + nh > 100) { nh = 100 - ny; nw = nh * aspect; } }
+        else if (d.handle === 'sw' || d.handle === 'ne') { nh = nw / aspect; ny = d.crop.y + d.crop.h - nh; if (ny < 0) { ny = 0; nh = d.crop.y + d.crop.h; nw = nh * aspect; } }
+      }
+
+      nw = clamp(Math.round(nw), 5, 100);
+      nh = clamp(Math.round(nh), 5, 100);
+      nx = clamp(Math.round(nx), 0, 100 - nw);
+      ny = clamp(Math.round(ny), 0, 100 - nh);
+      setCrop({ x: nx, y: ny, w: nw, h: nh });
+    };
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove as any);
+      window.removeEventListener('touchend', onUp);
+      if (!committedRef.current) { committedRef.current = true; saveState(); }
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove as any, { passive: false });
+    window.addEventListener('touchend', onUp);
+  }, [crop, cropAspect, getPos, setCrop, saveState]);
+
+  const fC = { x: crop.x, y: crop.y, w: crop.w, h: crop.h };
+  const handles = [
+    { id: 'nw', cx: fC.x, cy: fC.y },
+    { id: 'ne', cx: fC.x + fC.w, cy: fC.y },
+    { id: 'sw', cx: fC.x, cy: fC.y + fC.h },
+    { id: 'se', cx: fC.x + fC.w, cy: fC.y + fC.h },
+    { id: 'n', cx: fC.x + fC.w / 2, cy: fC.y },
+    { id: 's', cx: fC.x + fC.w / 2, cy: fC.y + fC.h },
+    { id: 'w', cx: fC.x, cy: fC.y + fC.h / 2 },
+    { id: 'e', cx: fC.x + fC.w, cy: fC.y + fC.h / 2 },
+  ];
+
+  const gH = (id: string) => {
+    const h = handles.find(x => x.id === id)!;
+    return (
+      <div
+        onMouseDown={(e) => onHandleDown(id, e)}
+        onTouchStart={(e) => onHandleDown(id, e)}
+        className="absolute z-20 cursor-pointer"
+        style={{
+          left: `calc(${h.cx}% - ${HANDLE_HIT / 2}px)`,
+          top: `calc(${h.cy}% - ${HANDLE_HIT / 2}px)`,
+          width: HANDLE_HIT, height: HANDLE_HIT,
+        }}
+      >
+        <div className="w-3 h-3 bg-white border border-black/30 rounded-sm shadow-md absolute"
+          style={{
+            left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+          }}
+        />
+      </div>
+    );
+  };
+
+  return (
+    <div ref={containerRef} className="absolute inset-0 z-10">
+      <svg viewBox="0 0 100 100" className="w-full h-full absolute inset-0 pointer-events-none">
+        <defs>
+          <mask id="cropMask">
+            <rect x="0" y="0" width="100" height="100" fill="white" />
+            <rect x={crop.x} y={crop.y} width={crop.w} height={crop.h} fill="black" />
+          </mask>
+        </defs>
+        <rect x="0" y="0" width="100" height="100" fill="rgba(0,0,0,0.5)" mask="url(#cropMask)" />
+        <rect x={crop.x} y={crop.y} width={crop.w} height={crop.h}
+          fill="none" stroke="white" strokeWidth="0.4" rx="0.3" />
+      </svg>
+      {gH('nw')}{gH('ne')}{gH('sw')}{gH('se')}
+      {gH('n')}{gH('s')}{gH('w')}{gH('e')}
+    </div>
+  );
+};
 
 // ─── Inline Music Picker (inside editor) ──────────────────────────
 const MusicPickerInline: React.FC<{ onSelect: (track: MusicTrack) => void }> = ({ onSelect }) => {
