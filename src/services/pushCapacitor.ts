@@ -7,6 +7,20 @@ function getServerUrl(): string | null {
   return import.meta.env.VITE_SERVER_URL || null;
 }
 
+const PUSH_TOKEN_KEY = 'redon_push_token';
+
+function registerTokenWithServer(token: string, userId: string) {
+  const baseUrl = getServerUrl();
+  if (!baseUrl) return;
+  fetch(`${baseUrl}/api/fcm/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: userId, token, device: 'android-fcm' }),
+  }).then(res => {
+    if (!res.ok) console.warn('[PUSH] register failed:', res.status);
+  }).catch(() => {});
+}
+
 export async function setupCapacitorPush(userId: string) {
   if (!isNative) return;
 
@@ -39,16 +53,18 @@ export async function setupCapacitorPush(userId: string) {
 
     PushNotifications.addListener('registration', (token: any) => {
       const pushToken = token.value;
-      const baseUrl = getServerUrl();
-      if (!baseUrl) return;
-      fetch(`${baseUrl}/api/fcm/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile_id: userId, token: pushToken, device: 'android-fcm' }),
-      }).catch(() => {});
+      try { localStorage.setItem(PUSH_TOKEN_KEY, pushToken); } catch {}
+      registerTokenWithServer(pushToken, userId);
     });
 
     PushNotifications.addListener('registrationError', () => {});
+
+    try {
+      const savedToken = localStorage.getItem(PUSH_TOKEN_KEY);
+      if (savedToken) {
+        registerTokenWithServer(savedToken, userId);
+      }
+    } catch {}
 
     PushNotifications.addListener('pushNotificationReceived', (notification: any) => {
       const data = notification.data;

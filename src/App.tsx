@@ -85,34 +85,53 @@ export default function App() {
     document.documentElement.classList.toggle('dark', isDarkMode);
   }, [isDarkMode]);
 
-  // Restore session on mount (Supabase maneja el token automáticamente)
+  // Restore session on mount + listen for auth changes
   useEffect(() => {
     setIsLoading(true);
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setUserId(session.user.id);
-        api.getProfile().then(p => {
-          setProfile(p);
-          setActiveTab('chats');
-        }).catch(() => {
-          supabase.auth.signOut();
-          setActiveTab('auth');
-        });
-        api.getChats().then(serverChats => {
-          const savedRaw = localStorage.getItem('saved_chats');
-          let savedChats: Chat[] = [];
-          if (savedRaw) try { savedChats = JSON.parse(savedRaw) as Chat[]; } catch {}
-          const serverIds = new Set(serverChats.map(c => c.id));
-          const merged = [...serverChats, ...savedChats.filter(c => !serverIds.has(c.id))];
-          saveChats(merged);
-          setChats(merged);
-        }).catch(() => showToast('Error de conexión al cargar chats'));
-        api.getMoments().then(setMoments).catch(() => showToast('Error de conexión al cargar momentos'));
-        setupCapacitorPush(session.user.id).catch(() => {});
+        loadUserData(session.user.id);
       }
       setIsLoading(false);
     }).catch(() => setIsLoading(false));
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session) {
+        setUserId(session.user.id);
+        loadUserData(session.user.id);
+      } else if (event === 'SIGNED_OUT') {
+        setUserId('');
+        setProfile({ name: '', avatar: '', phone: '', username: '', bio: '' });
+        setChats([]);
+        setMoments([]);
+        setActiveTab('auth');
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  function loadUserData(userId: string) {
+    api.getProfile().then(p => {
+      setProfile(p);
+      setActiveTab('chats');
+    }).catch(() => {
+      supabase.auth.signOut();
+      setActiveTab('auth');
+    });
+    api.getChats().then(serverChats => {
+      const savedRaw = localStorage.getItem('saved_chats');
+      let savedChats: Chat[] = [];
+      if (savedRaw) try { savedChats = JSON.parse(savedRaw) as Chat[]; } catch {}
+      const serverIds = new Set(serverChats.map(c => c.id));
+      const merged = [...serverChats, ...savedChats.filter(c => !serverIds.has(c.id))];
+      saveChats(merged);
+      setChats(merged);
+    }).catch(() => showToast('Error de conexión al cargar chats'));
+    api.getMoments().then(setMoments).catch(() => showToast('Error de conexión al cargar momentos'));
+    setupCapacitorPush(userId).catch(() => {});
+  }
 
   // Realtime subscription via Supabase
   useEffect(() => {

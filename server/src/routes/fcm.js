@@ -1,11 +1,8 @@
 import express from 'express';
 import webpush from 'web-push';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
+import { initializeApp, credential, apps } from 'firebase-admin';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const router = express.Router();
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkcavh.supabase.co';
@@ -16,66 +13,38 @@ const vapidPublicKey = process.env.VITE_FIREBASE_VAPID_KEY || '';
 const vapidPrivateKey = process.env.FIREBASE_PRIVATE_VAPID_KEY || '';
 const vapidEmail = process.env.VAPID_EMAIL || 'admin@redon.app';
 
-let firebaseAdmin = null;
+let serviceAccount;
+
+try {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        if (serviceAccount.private_key) {
+            serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+        }
+    }
+} catch (e) {
+    console.error("❌ Error al parsear FIREBASE_SERVICE_ACCOUNT:", e.message);
+}
+
+if (serviceAccount && apps.length === 0) {
+    try {
+        initializeApp({
+            credential: credential.cert(serviceAccount)
+        });
+        console.log("✅ Firebase Admin inicializado correctamente con Named Exports.");
+    } catch (error) {
+        console.error("❌ Error en initializeApp:", error.message);
+    }
+}
 
 async function initFirebaseAdmin() {
-  if (firebaseAdmin) return firebaseAdmin;
+  if (apps.length === 0) return null;
   try {
-    const mod = await import('firebase-admin');
-    const admin = mod.default || mod;
-    if (!admin.apps?.length) {
-      let credentials = null;
-
-      const saEnv = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FCM_SERVICE_ACCOUNT;
-      if (saEnv) {
-        try { credentials = JSON.parse(saEnv); } catch {
-          console.warn('[FCM] FIREBASE_SERVICE_ACCOUNT is set but is not valid JSON');
-        }
-      }
-
-      if (!credentials) {
-        const searchPaths = [
-          path.join(__dirname, '..', '..', '..', 'red-on-7e788-firebase-adminsdk-fbsvc-801e8d6528.json'),
-          path.join(__dirname, '..', '..', '..', 'firebase-credentials.json'),
-          process.env.FIREBASE_SERVICE_ACCOUNT_PATH || '',
-        ].filter(Boolean);
-        for (const fp of searchPaths) {
-          try {
-            const content = fs.readFileSync(fp, 'utf-8');
-            credentials = JSON.parse(content);
-            if (credentials) {
-              console.log('[FCM] Firebase Admin loaded from local file:', path.basename(fp));
-              break;
-            }
-          } catch {}
-        }
-      }
-
-      if (credentials) {
-        // Get cert function: v14+ subpath export first, fallback to namespace
-        let certFn;
-        try {
-          const { cert } = await import('firebase-admin/credential');
-          certFn = cert;
-        } catch {
-          certFn = admin.credential?.cert;
-        }
-        if (!certFn) {
-          throw new Error('credential.cert not found in firebase-admin');
-        }
-        admin.initializeApp({ credential: certFn(credentials) });
-        console.log('[FCM] Firebase Admin initialized successfully');
-      } else {
-        console.warn('[FCM] No Firebase Admin credentials found — Android FCM push unavailable');
-      }
-    }
-    if (admin.apps?.length) {
-      firebaseAdmin = admin;
-    }
-  } catch (err) {
-    console.warn('[FCM] Firebase Admin init error:', err.message);
+    const { getMessaging } = await import('firebase-admin/messaging');
+    return { messaging: getMessaging };
+  } catch {
+    return null;
   }
-  return firebaseAdmin;
 }
 
 if (vapidPublicKey && vapidPrivateKey) {
