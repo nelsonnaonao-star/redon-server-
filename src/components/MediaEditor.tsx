@@ -1000,7 +1000,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
   };
 
   // Reusable content block (image/video + text + stickers)
-  const contentBlock = useMemo(() => (
+  const contentBlock = (
     <div
       key={`${videoTransition}-${animationTriggerKey}`}
       className="relative transition-all duration-300 overflow-hidden bg-black/40"
@@ -1155,16 +1155,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
                 </motion.div>
               ))}
             </div>
-          ), [videoTransition, animationTriggerKey, rotation, zoomLevel, panX, panY,
-              getTransitionStyle, collageImages.length, collageLayout, collageUrls,
-              getCollageMaxImages, isVideo, fileUrl, filterStyle,
-              isVideoMuted, uploadedAudioUrl, isPlay, playbackSpeed,
-              textOverlay, textPosition, textBg, getTextAnimationClass,
-              textFont, textColor, getTextAnimationStyle,
-              activeFilter, rainCanvasRef, activeStickers,
-              imageRef, videoRef, audioRef,
-              handleVideoLoadedMetadata, handleVideoTimeUpdate,
-              setIsPlay, setIsVideoMuted, setTextPosition, handleRemoveSticker]);
+          );
 
   // Bottom bar shared by image and video — extracted for guaranteed identical rendering
   const renderBottomBar = () => (
