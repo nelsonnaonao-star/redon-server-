@@ -348,35 +348,24 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({
     return () => { running = false; cancelAnimationFrame(rainAnimRef.current); window.removeEventListener('resize', resize); };
   }, [activeFilter]);
 
-  // Memoize fileUrl so it doesn't change on every render (avoids image/video reload)
   const effectiveFile = processedFile || file;
   const isVideo = useMemo(
     () => effectiveFile?.type?.startsWith('video/') ?? false,
     [effectiveFile]
   );
-  const [fileUrl, setFileUrl] = useState('');
 
-  // Read file as ArrayBuffer first for Android content:// URI compatibility
-  useEffect(() => {
-    if (!effectiveFile || effectiveFile.size === 0) {
-      setFileUrl('');
-      return;
-    }
-    let cancelled = false;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (cancelled) return;
-      const blob = new Blob([reader.result as ArrayBuffer], { type: effectiveFile.type });
-      const url = URL.createObjectURL(blob);
-      setFileUrl(url);
-    };
-    reader.onerror = () => {
-      if (cancelled) return;
-      setFileUrl(URL.createObjectURL(effectiveFile));
-    };
-    reader.readAsArrayBuffer(effectiveFile);
-    return () => { cancelled = true; if (fileUrl?.startsWith('blob:')) URL.revokeObjectURL(fileUrl); };
+  // Synchronous — creates blob URL immediately, works on Android File objects
+  const fileUrl = useMemo(() => {
+    if (!effectiveFile) return '';
+    if (effectiveFile.size > 0) return URL.createObjectURL(effectiveFile);
+    return '';
   }, [effectiveFile]);
+
+  // Revoke previous blob URL when file changes or component unmounts
+  useEffect(() => {
+    const url = fileUrl;
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [fileUrl]);
 
   // Fallback placeholder when no file or empty mock file
   const showPlaceholder = !effectiveFile || effectiveFile.size === 0;

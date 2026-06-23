@@ -298,6 +298,10 @@ router.post('/webhook', async (req, res) => {
         try {
           const message = {
             token: t.token,
+            notification: {
+              title: senderName,
+              body: text || 'Nuevo mensaje',
+            },
             data: {
               title: senderName,
               body: text || 'Nuevo mensaje',
@@ -310,6 +314,13 @@ router.post('/webhook', async (req, res) => {
             android: {
               priority: 'high',
               ttl: 86400000,
+              notification: {
+                channel_id: 'redon-messages',
+                tag: chat_id,
+                click_action: 'OPEN_APP',
+                notification_count: 1,
+                visibility: 'public',
+              },
             },
           };
           const response = await admin.messaging().send(message);
