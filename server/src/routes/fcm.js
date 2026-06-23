@@ -52,7 +52,18 @@ async function initFirebaseAdmin() {
       }
 
       if (credentials) {
-        admin.initializeApp({ credential: admin.credential.cert(credentials) });
+        // Get cert function: v14+ subpath export first, fallback to namespace
+        let certFn;
+        try {
+          const { cert } = await import('firebase-admin/credential');
+          certFn = cert;
+        } catch {
+          certFn = admin.credential?.cert;
+        }
+        if (!certFn) {
+          throw new Error('credential.cert not found in firebase-admin');
+        }
+        admin.initializeApp({ credential: certFn(credentials) });
         console.log('[FCM] Firebase Admin initialized successfully');
       } else {
         console.warn('[FCM] No Firebase Admin credentials found — Android FCM push unavailable');
