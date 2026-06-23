@@ -124,7 +124,7 @@ router.post('/send', async (req, res) => {
             } : {}),
             android: {
               priority: 'high',
-              ttl: '86400s',
+              ttl: 86400000,
               notification: {
                 channel_id: isCall ? 'redon-calls' : 'redon-messages',
                 tag: data?.chatId || 'redon-message',
@@ -267,7 +267,7 @@ router.post('/webhook', async (req, res) => {
             },
             android: {
               priority: 'high',
-              ttl: '86400s',
+              ttl: 86400000,
             },
           };
           const response = await admin.messaging().send(message);
