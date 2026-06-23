@@ -122,11 +122,13 @@ router.post('/register', async (req, res) => {
 // Messages are sent via Supabase Database Webhook (see /webhook).
 router.post('/send', async (req, res) => {
   const { profile_id, title, body, data } = req.body;
+  console.log('[FCM-SEND] requested for profile:', profile_id, 'title:', title);
   if (!profile_id || !title) {
     return res.status(400).json({ error: 'profile_id and title required' });
   }
 
   const tokens = await getTokens(profile_id);
+  console.log('[FCM-SEND] tokens found:', tokens.length);
   if (!tokens.length) {
     return res.json({ ok: true, sent: 0 });
   }
@@ -134,6 +136,7 @@ router.post('/send', async (req, res) => {
   const results = { web: 0, android: 0, errors: 0 };
 
   for (const t of tokens) {
+    console.log('[FCM-SEND] device:', t.device);
     if (t.device === 'android-fcm' || t.device === 'android') {
       const admin = await initFirebaseAdmin();
       if (admin) {
@@ -166,12 +169,15 @@ router.post('/send', async (req, res) => {
               },
             },
           };
-          await admin.messaging().send(message);
+          const resp = await admin.messaging().send(message);
+          console.log('[FCM-SEND] FCM success:', resp);
           results.android++;
-        } catch {
+        } catch (err) {
+          console.error('[FCM-SEND] FCM error:', err.message, err.code || '');
           results.errors++;
         }
       } else {
+        console.error('[FCM-SEND] Firebase Admin not initialized');
         results.errors++;
       }
     } else {
@@ -179,13 +185,16 @@ router.post('/send', async (req, res) => {
         const subscription = JSON.parse(t.token);
         const payload = JSON.stringify({ title, body, data: data || {}, icon: '/icon.png', badge: '/badge.png' });
         await webpush.sendNotification(subscription, payload);
+        console.log('[FCM-SEND] web push success');
         results.web++;
-      } catch {
+      } catch (err) {
+        console.error('[FCM-SEND] web push error:', err.message);
         results.errors++;
       }
     }
   }
 
+  console.log('[FCM-SEND] results:', JSON.stringify(results));
   res.json({ ok: true, ...results });
 });
 
@@ -193,64 +202,92 @@ router.post('/send', async (req, res) => {
 // This is the RELIABLE path — runs server-side, doesn't depend on sender's frontend.
 // Supabase sends: { type: 'INSERT', table: 'messages', record: { ... }, ... }
 router.post('/webhook', async (req, res) => {
-  // Reject non-Supabase requests (basic check — Supabase sends a specific body shape)
+  const startTime = Date.now();
+  console.log('[FCM-WEBHOOK] Received webhook from Supabase');
+
   const { type, table, record } = req.body;
+  console.log('[FCM-WEBHOOK] body keys:', Object.keys(req.body).join(', '));
+  console.log('[FCM-WEBHOOK] type:', type, 'table:', table, 'has record:', !!record);
+
   if (type !== 'INSERT' || table !== 'messages' || !record) {
-    return res.status(400).json({ error: 'Invalid webhook payload' });
+    console.warn('[FCM-WEBHOOK] Invalid payload shape — ignoring');
+    return res.status(200).json({ ok: true, ignored: 'invalid shape' });
   }
 
   const { chat_id, sender_id, text } = record;
+  console.log('[FCM-WEBHOOK] record -> chat_id:', chat_id, 'sender_id:', sender_id, 'text_length:', text?.length);
+
   if (!chat_id || !sender_id) {
-    return res.status(200).json({ ok: true, skipped: true });
+    console.warn('[FCM-WEBHOOK] missing chat_id or sender_id — skipping');
+    return res.status(200).json({ ok: true, skipped: 'missing ids' });
   }
 
   // Find the recipient (the other participant in this chat)
   let receiverId = null;
-  try {
-    const { data: participants } = supabase
-      ? await supabase
-          .from('chat_participants')
-          .select('profile_id')
-          .eq('chat_id', chat_id)
-          .neq('profile_id', sender_id)
-          .limit(1)
-      : { data: null };
-    if (participants && participants.length > 0) {
-      receiverId = participants[0].profile_id;
+  if (supabase) {
+    try {
+      const { data: participants, error } = await supabase
+        .from('chat_participants')
+        .select('profile_id')
+        .eq('chat_id', chat_id)
+        .neq('profile_id', sender_id)
+        .limit(1);
+      console.log('[FCM-WEBHOOK] chat_participants query:', error ? 'error' : 'ok', 'count:', participants?.length);
+      if (!error && participants && participants.length > 0) {
+        receiverId = participants[0].profile_id;
+      } else if (error) {
+        console.error('[FCM-WEBHOOK] chat_participants error:', error.message);
+      }
+    } catch (err) {
+      console.error('[FCM-WEBHOOK] chat_participants exception:', err.message);
     }
-  } catch {}
+  } else {
+    console.warn('[FCM-WEBHOOK] supabase client not initialized (missing SUPABASE_SERVICE_KEY)');
+  }
 
   if (!receiverId) {
-    return res.status(200).json({ ok: true, skipped: 'no receiver' });
+    console.warn('[FCM-WEBHOOK] no receiver found for chat_id:', chat_id);
+    return res.status(200).json({ ok: true, skipped: 'no receiver found' });
   }
+  console.log('[FCM-WEBHOOK] receiverId:', receiverId);
 
   // Get sender's name
   let senderName = 'RED ON';
-  try {
-    const { data: profile } = supabase
-      ? await supabase
-          .from('profiles')
-          .select('name')
-          .eq('id', sender_id)
-          .single()
-      : { data: null };
-    if (profile && profile.name) {
-      senderName = profile.name;
+  if (supabase) {
+    try {
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('name')
+        .eq('id', sender_id)
+        .single();
+      if (!error && profile && profile.name) {
+        senderName = profile.name;
+        console.log('[FCM-WEBHOOK] sender name:', senderName);
+      } else if (error) {
+        console.warn('[FCM-WEBHOOK] profile fetch error:', error.message);
+      }
+    } catch (err) {
+      console.warn('[FCM-WEBHOOK] profile fetch exception:', err.message);
     }
-  } catch {}
+  }
 
   // Get receiver's push tokens
+  console.log('[FCM-WEBHOOK] fetching tokens for receiver:', receiverId);
   const tokens = await getTokens(receiverId);
+  console.log('[FCM-WEBHOOK] tokens found:', tokens.length);
   if (!tokens.length) {
-    return res.status(200).json({ ok: true, sent: 0, reason: 'no tokens' });
+    console.warn('[FCM-WEBHOOK] no push tokens for receiver — cannot send push');
+    return res.status(200).json({ ok: true, sent: 0, reason: 'no tokens for receiver' });
   }
 
   const results = { web: 0, android: 0, errors: 0 };
 
   for (const t of tokens) {
+    console.log('[FCM-WEBHOOK] sending to device:', t.device, 'token preview:', t.token.substring(0, 20) + '...');
     if (t.device === 'android-fcm' || t.device === 'android') {
       const admin = await initFirebaseAdmin();
       if (admin) {
+        console.log('[FCM-WEBHOOK] Firebase Admin initialized, sending FCM message...');
         try {
           const message = {
             token: t.token,
@@ -279,13 +316,15 @@ router.post('/webhook', async (req, res) => {
               },
             },
           };
-          await admin.messaging().send(message);
+          const response = await admin.messaging().send(message);
+          console.log('[FCM-WEBHOOK] FCM send success:', response);
           results.android++;
         } catch (err) {
-          console.warn('[FCM] Webhook send error:', err.message);
+          console.error('[FCM-WEBHOOK] FCM send error:', err.message, err.code || '');
           results.errors++;
         }
       } else {
+        console.error('[FCM-WEBHOOK] Firebase Admin not available (check FIREBASE_SERVICE_ACCOUNT)');
         results.errors++;
       }
     } else {
@@ -299,13 +338,17 @@ router.post('/webhook', async (req, res) => {
           badge: '/badge.png',
         });
         await webpush.sendNotification(subscription, payload);
+        console.log('[FCM-WEBHOOK] Web push success');
         results.web++;
-      } catch {
+      } catch (err) {
+        console.error('[FCM-WEBHOOK] Web push error:', err.message);
         results.errors++;
       }
     }
   }
 
+  const elapsed = Date.now() - startTime;
+  console.log('[FCM-WEBHOOK] done in', elapsed, 'ms — results:', JSON.stringify(results));
   res.json({ ok: true, ...results });
 });
 

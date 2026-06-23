@@ -113,6 +113,7 @@ export const CallSuite: React.FC<CallSuiteProps> = ({
   const iceCandidatesQueue = useRef<any[]>([]);
   const offerRetryRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingOfferRef = useRef<any>(null);
+  const pendingOfferResolverRef = useRef<((sdp: RTCSessionDescriptionInit) => void) | null>(null);
   const offerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
@@ -304,21 +305,21 @@ export const CallSuite: React.FC<CallSuiteProps> = ({
         }
       };
 
-      // Wait for remote offer if not yet received
+      // Wait for remote offer via event-driven deferred promise (no polling)
       if (pendingOfferRef.current) {
         await pc.setRemoteDescription(new RTCSessionDescription(pendingOfferRef.current));
-      } else if (pc.signalingState !== 'have-remote-offer') {
+      } else {
         await new Promise<void>((resolve, reject) => {
-          const check = setInterval(() => {
-            if (pendingOfferRef.current) {
-              clearInterval(check);
-              resolve();
-            }
-          }, 50);
-          setTimeout(() => {
-            clearInterval(check);
+          const timeout = setTimeout(() => {
+            pendingOfferResolverRef.current = null;
             reject(new Error('Tiempo de espera agotado esperando oferta remota'));
           }, 10000);
+          pendingOfferResolverRef.current = (sdp) => {
+            pendingOfferRef.current = sdp;
+            pendingOfferResolverRef.current = null;
+            clearTimeout(timeout);
+            resolve();
+          };
         });
         await pc.setRemoteDescription(new RTCSessionDescription(pendingOfferRef.current));
       }
@@ -457,6 +458,10 @@ export const CallSuite: React.FC<CallSuiteProps> = ({
             } catch (err) {
               console.warn('Failed to handle re-offer:', err);
             }
+            return;
+          }
+          if (pendingOfferResolverRef.current) {
+            pendingOfferResolverRef.current(payload.payload.sdp);
           }
         });
 
@@ -520,7 +525,12 @@ export const CallSuite: React.FC<CallSuiteProps> = ({
         }
         return;
       }
-      pendingOfferRef.current = payload.payload.sdp;
+      // If someone is awaiting the offer, resolve them immediately
+      if (pendingOfferResolverRef.current) {
+        pendingOfferResolverRef.current(payload.payload.sdp);
+      } else {
+        pendingOfferRef.current = payload.payload.sdp;
+      }
     });
 
     channel.on('broadcast', { event: 'ice-candidate' }, (payload: any) => {
