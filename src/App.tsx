@@ -462,7 +462,8 @@ export default function App() {
       });
       const updated = await api.getMoments();
       setMoments(updated);
-    } catch {
+    } catch (err) {
+      console.error('[Momento] Error al publicar:', err);
       showToast('Error al publicar momento');
     }
   };
