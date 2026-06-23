@@ -107,10 +107,6 @@ router.post('/send', async (req, res) => {
       if (admin) {
         try {
           const isCall = data && data.type === 'call';
-          const common = {
-            token: t.token,
-            android: { priority: 'high', ttl: 86400000 },
-          };
 
           // Single notification-type message for both calls and messages
           // System auto-displays in background/killed; onMessageReceived fires in foreground
