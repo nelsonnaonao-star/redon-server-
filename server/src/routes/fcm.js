@@ -107,36 +107,47 @@ router.post('/send', async (req, res) => {
       if (admin) {
         try {
           const isCall = data && data.type === 'call';
-
-          // Single notification-type message for both calls and messages
-          // System auto-displays in background/killed; onMessageReceived fires in foreground
-          const channelId = isCall ? 'redon-calls' : 'redon-messages';
-          const tag = isCall ? `call-${data?.chatId || Date.now()}` : (data?.chatId || 'redon-message');
           const notifBody = isCall ? (body || 'Llamada entrante...') : (body || 'Nuevo mensaje');
-          await admin.messaging().send({
-            token: t.token,
-            notification: {
-              title: title || 'RED ON',
-              body: notifBody,
-            },
-            data: {
-              title: title || 'RED ON',
-              body: notifBody,
-              badge: '1', notificationCount: '1',
-              ...(data || {}),
-            },
-            android: {
-              priority: 'high',
-              ttl: 86400000,
-              notification: {
-                channel_id: channelId,
-                tag,
-                click_action: 'OPEN_APP',
-                notification_count: 1,
-                visibility: 'public',
+
+          if (isCall) {
+            const callData = data || {};
+            await admin.messaging().send({
+              token: t.token,
+              notification: { title: title || 'RED ON', body: notifBody },
+              data: {
+                title: title || 'RED ON', body: notifBody,
+                badge: '1', notificationCount: '1',
+                ...callData,
+                type: 'call',
               },
-            },
-          }).catch(() => {});
+              android: {
+                priority: 'high', ttl: 86400000,
+                notification: {
+                  channel_id: 'redon-calls', tag: 'call-' + (callData.chatId || ''),
+                  click_action: 'ANSWER_CALL', notification_count: 1,
+                  visibility: 'public',
+                },
+              },
+            });
+          } else {
+            const channelId = 'redon-messages';
+            await admin.messaging().send({
+              token: t.token,
+              notification: { title: title || 'RED ON', body: notifBody },
+              data: {
+                title: title || 'RED ON', body: notifBody,
+                badge: '1', notificationCount: '1',
+                ...(data || {}),
+              },
+              android: {
+                priority: 'high', ttl: 86400000,
+                notification: {
+                  channel_id: channelId, tag: data?.chatId || 'redon-message',
+                  click_action: 'OPEN_APP', notification_count: 1, visibility: 'public',
+                },
+              },
+            }).catch(() => {});
+          }
           results.android++;
         } catch (err) {
           console.error('[FCM-SEND] FCM error:', err.message, err.code || '');
@@ -164,9 +175,10 @@ router.post('/send', async (req, res) => {
   res.json({ ok: true, ...results });
 });
 
-// ─── WEBHOOK: called by Supabase Database Webhook when a message is inserted ────
-// This is the RELIABLE path — runs server-side, doesn't depend on sender's frontend.
-// Supabase sends: { type: 'INSERT', table: 'messages', record: { ... }, ... }
+// ─── WEBHOOK: called by Supabase Database Webhook when a message or call is inserted ────
+// Messages path is the RELIABLE server-side path (no frontend dependency).
+// Calls path matches the same pattern — server-side push via DB trigger.
+// Supabase sends: { type: 'INSERT', table: 'messages'|'calls', record: { ... }, ... }
 router.post('/webhook', async (req, res) => {
   const startTime = Date.now();
   console.log('[FCM-WEBHOOK] Received webhook from Supabase');
@@ -175,147 +187,283 @@ router.post('/webhook', async (req, res) => {
   console.log('[FCM-WEBHOOK] body keys:', Object.keys(req.body).join(', '));
   console.log('[FCM-WEBHOOK] type:', type, 'table:', table, 'has record:', !!record);
 
-  if (type !== 'INSERT' || table !== 'messages' || !record) {
+  if (type !== 'INSERT' || !record) {
     console.warn('[FCM-WEBHOOK] Invalid payload shape — ignoring');
     return res.status(200).json({ ok: true, ignored: 'invalid shape' });
   }
 
-  const { chat_id, sender_id, text } = record;
-  console.log('[FCM-WEBHOOK] record -> chat_id:', chat_id, 'sender_id:', sender_id, 'text_length:', text?.length);
+  if (table === 'messages') {
+    // ── Messages path ──────────────────────────────────────────────
+    const { chat_id, sender_id, text } = record;
+    console.log('[FCM-WEBHOOK] messages record -> chat_id:', chat_id, 'sender_id:', sender_id, 'text_length:', text?.length);
 
-  if (!chat_id || !sender_id) {
-    console.warn('[FCM-WEBHOOK] missing chat_id or sender_id — skipping');
-    return res.status(200).json({ ok: true, skipped: 'missing ids' });
-  }
-
-  // Find the recipient (the other participant in this chat)
-  let receiverId = null;
-  if (supabase) {
-    try {
-      const { data: participants, error } = await supabase
-        .from('chat_participants')
-        .select('profile_id')
-        .eq('chat_id', chat_id)
-        .neq('profile_id', sender_id)
-        .limit(1);
-      console.log('[FCM-WEBHOOK] chat_participants query:', error ? 'error' : 'ok', 'count:', participants?.length);
-      if (!error && participants && participants.length > 0) {
-        receiverId = participants[0].profile_id;
-      } else if (error) {
-        console.error('[FCM-WEBHOOK] chat_participants error:', error.message);
-      }
-    } catch (err) {
-      console.error('[FCM-WEBHOOK] chat_participants exception:', err.message);
+    if (!chat_id || !sender_id) {
+      console.warn('[FCM-WEBHOOK] missing chat_id or sender_id — skipping');
+      return res.status(200).json({ ok: true, skipped: 'missing ids' });
     }
-  } else {
-    console.warn('[FCM-WEBHOOK] supabase client not initialized (missing SUPABASE_SERVICE_KEY)');
-  }
 
-  if (!receiverId) {
-    console.warn('[FCM-WEBHOOK] no receiver found for chat_id:', chat_id);
-    return res.status(200).json({ ok: true, skipped: 'no receiver found' });
-  }
-  console.log('[FCM-WEBHOOK] receiverId:', receiverId);
-
-  // Get sender's name
-  let senderName = 'RED ON';
-  if (supabase) {
-    try {
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('name')
-        .eq('id', sender_id)
-        .single();
-      if (!error && profile && profile.name) {
-        senderName = profile.name;
-        console.log('[FCM-WEBHOOK] sender name:', senderName);
-      } else if (error) {
-        console.warn('[FCM-WEBHOOK] profile fetch error:', error.message);
+    // Find the recipient (the other participant in this chat)
+    let receiverId = null;
+    if (supabase) {
+      try {
+        const { data: participants, error } = await supabase
+          .from('chat_participants')
+          .select('profile_id')
+          .eq('chat_id', chat_id)
+          .neq('profile_id', sender_id)
+          .limit(1);
+        if (!error && participants && participants.length > 0) {
+          receiverId = participants[0].profile_id;
+        } else if (error) {
+          console.error('[FCM-WEBHOOK] chat_participants error:', error.message);
+        }
+      } catch (err) {
+        console.error('[FCM-WEBHOOK] chat_participants exception:', err.message);
       }
-    } catch (err) {
-      console.warn('[FCM-WEBHOOK] profile fetch exception:', err.message);
     }
-  }
 
-  // Get receiver's push tokens
-  console.log('[FCM-WEBHOOK] fetching tokens for receiver:', receiverId);
-  const tokens = await getTokens(receiverId);
-  console.log('[FCM-WEBHOOK] tokens found:', tokens.length);
-  if (!tokens.length) {
-    console.warn('[FCM-WEBHOOK] no push tokens for receiver — cannot send push');
-    return res.status(200).json({ ok: true, sent: 0, reason: 'no tokens for receiver' });
-  }
+    if (!receiverId) {
+      console.warn('[FCM-WEBHOOK] no receiver found for chat_id:', chat_id);
+      return res.status(200).json({ ok: true, skipped: 'no receiver found' });
+    }
 
-  const results = { web: 0, android: 0, errors: 0 };
+    // Block check: if receiver has blocked sender, skip notification
+    if (supabase) {
+      try {
+        const { data: blockCheck } = await supabase
+          .from('blocks')
+          .select('id')
+          .eq('blocker_id', receiverId)
+          .eq('blocked_id', sender_id)
+          .maybeSingle();
+        if (blockCheck) {
+          console.log('[FCM-WEBHOOK] sender is blocked by receiver — skipping push');
+          return res.status(200).json({ ok: true, skipped: 'blocked' });
+        }
+      } catch (err) {
+        console.warn('[FCM-WEBHOOK] block check error:', err.message);
+      }
+    }
 
-  for (const t of tokens) {
-    console.log('[FCM-WEBHOOK] sending to device:', t.device, 'token preview:', t.token.substring(0, 20) + '...');
-    if (t.device === 'android-fcm' || t.device === 'android') {
-      const admin = await initFirebaseAdmin();
-      if (admin) {
-        console.log('[FCM-WEBHOOK] Firebase Admin initialized, sending FCM message...');
-        try {
-          const message = {
-            token: t.token,
-            notification: {
-              title: senderName,
-              body: text || 'Nuevo mensaje',
-            },
-            data: {
-              title: senderName,
-              body: text || 'Nuevo mensaje',
-              badge: '1',
-              notificationCount: '1',
-              chatId: chat_id,
-              type: 'message',
-              contactId: sender_id,
-            },
-            android: {
-              priority: 'high',
-              ttl: 86400000,
-              notification: {
-                channel_id: 'redon-messages',
-                tag: chat_id,
-                click_action: 'OPEN_APP',
-                notification_count: 1,
-                visibility: 'public',
+    // Get sender's name and avatar
+    let senderName = 'RED ON';
+    let senderAvatar = '';
+    if (supabase) {
+      try {
+        const { data: profile, error } = await supabase
+          .from('profiles')
+          .select('name, avatar_url')
+          .eq('id', sender_id)
+          .single();
+        if (!error && profile) {
+          senderName = profile.name || 'RED ON';
+          senderAvatar = profile.avatar_url || '';
+        }
+      } catch (err) {
+        console.warn('[FCM-WEBHOOK] profile fetch exception:', err.message);
+      }
+    }
+
+    // Get receiver's notification preferences (vista previa)
+    let showPreview = true;
+    if (supabase) {
+      try {
+        const { data: profile, error } = await supabase
+          .from('profiles')
+          .select('notif_config')
+          .eq('id', receiverId)
+          .single();
+        if (!error && profile?.notif_config) {
+          showPreview = profile.notif_config.preview !== false;
+        }
+      } catch (err) {
+        console.warn('[FCM-WEBHOOK] notif_config lookup error:', err.message);
+      }
+    }
+
+    // ── Auto-reply: send configured message if first contact ──
+    if (supabase) {
+      try {
+        const { data: receiverProfile } = await supabase
+          .from('profiles')
+          .select('auto_reply_config')
+          .eq('id', receiverId)
+          .single();
+        if (receiverProfile?.auto_reply_config?.enabled && receiverProfile.auto_reply_config.message) {
+          const cfg = receiverProfile.auto_reply_config;
+          const { count } = await supabase
+            .from('messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('chat_id', chat_id)
+            .eq('sender_id', receiverId);
+          if (count === 0) {
+            await supabase.from('messages').insert({
+              chat_id,
+              sender_id: receiverId,
+              text: cfg.message,
+              created_at: new Date().toISOString(),
+            });
+            console.log('[FCM-WEBHOOK] auto-reply enviado de', receiverId, 'en chat', chat_id);
+          }
+        }
+      } catch (err) {
+        console.warn('[FCM-WEBHOOK] auto-reply error:', err.message);
+      }
+    }
+
+    const notifBody = showPreview ? (text || 'Nuevo mensaje') : 'Nuevo mensaje';
+    const tokens = await getTokens(receiverId);
+    if (!tokens.length) {
+      console.warn('[FCM-WEBHOOK] no push tokens for receiver — skipping');
+      return res.status(200).json({ ok: true, sent: 0, reason: 'no tokens for receiver' });
+    }
+
+    const results = { web: 0, android: 0, errors: 0 };
+
+    for (const t of tokens) {
+      if (t.device === 'android-fcm' || t.device === 'android') {
+        const admin = await initFirebaseAdmin();
+        if (admin) {
+          try {
+            await admin.messaging().send({
+              token: t.token,
+              notification: { title: senderName, body: notifBody },
+              data: {
+                title: senderName, body: notifBody,
+                badge: '1', notificationCount: '1',
+                chatId: chat_id, type: 'message', contactId: sender_id,
+                senderAvatar,
               },
-            },
-          };
-          const response = await admin.messaging().send(message);
-          console.log('[FCM-WEBHOOK] FCM send success:', response);
-          results.android++;
-        } catch (err) {
-          console.error('[FCM-WEBHOOK] FCM send error:', err.message, err.code || '');
+              android: {
+                priority: 'high', ttl: 86400000,
+                notification: {
+                  channel_id: 'redon-messages', tag: chat_id,
+                  click_action: 'OPEN_APP', notification_count: 1, visibility: 'public',
+                },
+              },
+            });
+            results.android++;
+          } catch (err) {
+            console.error('[FCM-WEBHOOK] FCM send error:', err.message, err.code || '');
+            results.errors++;
+          }
+        } else {
           results.errors++;
         }
       } else {
-        console.error('[FCM-WEBHOOK] Firebase Admin not available (check FIREBASE_SERVICE_ACCOUNT)');
-        results.errors++;
-      }
-    } else {
-      try {
-        const subscription = JSON.parse(t.token);
-        const payload = JSON.stringify({
-          title: senderName,
-          body: text || 'Nuevo mensaje',
-          data: { chatId: chat_id, type: 'message', contactId: sender_id },
-          icon: '/icon.png',
-          badge: '/badge.png',
-        });
-        await webpush.sendNotification(subscription, payload);
-        console.log('[FCM-WEBHOOK] Web push success');
-        results.web++;
-      } catch (err) {
-        console.error('[FCM-WEBHOOK] Web push error:', err.message);
-        results.errors++;
+        try {
+          const subscription = JSON.parse(t.token);
+          await webpush.sendNotification(subscription, JSON.stringify({
+            title: senderName, body: notifBody,
+            data: { chatId: chat_id, type: 'message', contactId: sender_id, senderAvatar },
+            icon: senderAvatar || '/icon.png', badge: '/badge.png',
+          }));
+          results.web++;
+        } catch (err) {
+          console.error('[FCM-WEBHOOK] Web push error:', err.message);
+          results.errors++;
+        }
       }
     }
-  }
 
-  const elapsed = Date.now() - startTime;
-  console.log('[FCM-WEBHOOK] done in', elapsed, 'ms — results:', JSON.stringify(results));
-  res.json({ ok: true, ...results });
+    const elapsed = Date.now() - startTime;
+    console.log('[FCM-WEBHOOK] messages done in', elapsed, 'ms — results:', JSON.stringify(results));
+    return res.json({ ok: true, ...results });
+
+  } else if (table === 'calls') {
+    // ── Calls path ────────────────────────────────────────────────
+    const { chat_id, caller_id, callee_id, call_type } = record;
+    console.log('[FCM-WEBHOOK] calls record -> chat_id:', chat_id, 'caller_id:', caller_id, 'callee_id:', callee_id);
+
+    if (!chat_id || !caller_id || !callee_id) {
+      console.warn('[FCM-WEBHOOK] missing chat_id, caller_id, or callee_id — skipping');
+      return res.status(200).json({ ok: true, skipped: 'missing ids' });
+    }
+
+    // Get caller's name and avatar
+    let callerName = 'RED ON';
+    let callerAvatar = '';
+    if (supabase) {
+      try {
+        const { data: profile, error } = await supabase
+          .from('profiles')
+          .select('name, avatar_url')
+          .eq('id', caller_id)
+          .single();
+        if (!error && profile) {
+          callerName = profile.name || 'RED ON';
+          callerAvatar = profile.avatar_url || '';
+        }
+      } catch (err) {
+        console.warn('[FCM-WEBHOOK] caller profile exception:', err.message);
+      }
+    }
+
+    // Get callee's push tokens
+    const tokens = await getTokens(callee_id);
+    if (!tokens.length) {
+      console.warn('[FCM-WEBHOOK] no push tokens for callee — skipping');
+      return res.status(200).json({ ok: true, sent: 0, reason: 'no tokens for callee' });
+    }
+
+    const results = { web: 0, android: 0, errors: 0 };
+
+    for (const t of tokens) {
+      if (t.device === 'android-fcm' || t.device === 'android') {
+        const admin = await initFirebaseAdmin();
+        if (admin) {
+          try {
+            await admin.messaging().send({
+              token: t.token,
+              notification: { title: callerName, body: 'Llamada entrante' },
+              data: {
+                title: callerName, body: 'Llamada entrante',
+                badge: '1', notificationCount: '1',
+                chatId: chat_id, type: 'call',
+                callerId: caller_id, callerName, callerAvatar,
+                callType: call_type || 'audio',
+              },
+              android: {
+                priority: 'high', ttl: 86400000,
+                notification: {
+                  channel_id: 'redon-calls', tag: 'call-' + chat_id,
+                  click_action: 'ANSWER_CALL', notification_count: 1,
+                  visibility: 'public',
+                },
+              },
+            });
+            results.android++;
+          } catch (err) {
+            console.error('[FCM-WEBHOOK] FCM call push error:', err.message, err.code || '');
+            results.errors++;
+          }
+        } else {
+          results.errors++;
+        }
+      } else {
+        try {
+          const subscription = JSON.parse(t.token);
+          await webpush.sendNotification(subscription, JSON.stringify({
+            title: callerName, body: 'Llamada entrante...',
+            data: { chatId: chat_id, type: 'call', callerId: caller_id, callerName, callerAvatar, callType: call_type || 'audio' },
+            icon: '/icon.png', badge: '/badge.png', requireInteraction: true,
+          }));
+          results.web++;
+        } catch (err) {
+          console.error('[FCM-WEBHOOK] Web push error:', err.message);
+          results.errors++;
+        }
+      }
+    }
+
+    const elapsed = Date.now() - startTime;
+    console.log('[FCM-WEBHOOK] calls done in', elapsed, 'ms — results:', JSON.stringify(results));
+    return res.json({ ok: true, ...results });
+
+  } else {
+    console.warn('[FCM-WEBHOOK] Unknown table:', table, '— ignoring');
+    return res.status(200).json({ ok: true, ignored: 'unknown table' });
+  }
 });
 
 export default router;

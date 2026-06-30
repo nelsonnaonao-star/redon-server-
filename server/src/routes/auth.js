@@ -64,11 +64,13 @@ router.post('/send-reset-code', async (req, res) => {
 
     console.log(`[SMS-RECOVERY] Code for ${profile.phone_number}: ${code}`);
 
-    // TODO: Integrate with real SMS provider (Twilio, etc.)
+    // ⚠️ Modo desarrollo: envía el código en la respuesta para mostrarlo en la UI
+    // En producción, integrar Twilio y eliminar debugCode
     res.json({
       message: 'Código enviado por SMS',
       maskedPhone,
       expiresIn: 900,
+      debugCode: code,
     });
   } catch (err) {
     console.error('[SMS-RECOVERY] Error:', err);
@@ -143,6 +145,30 @@ router.post('/update-password', async (req, res) => {
   } catch (err) {
     console.error('[SMS-RECOVERY] Update password error:', err);
     res.status(500).json({ error: 'Error al actualizar la contraseña' });
+  }
+});
+
+// ─── Auto-confirm user after registration ──────────────────────────
+router.post('/auto-confirm', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId requerido' });
+
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(
+      userId,
+      { email_confirm: true },
+    );
+
+    if (error) {
+      console.error('[AUTO-CONFIRM] Error:', error);
+      return res.status(500).json({ error: 'Error al confirmar usuario' });
+    }
+
+    console.log(`[AUTO-CONFIRM] User ${userId} confirmed`);
+    res.json({ message: 'Usuario confirmado' });
+  } catch (err) {
+    console.error('[AUTO-CONFIRM] Error:', err);
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 

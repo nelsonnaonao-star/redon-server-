@@ -10,6 +10,8 @@ import { initDb } from './db.js';
 import authRoutes from './routes/auth.js';
 import fcmRoutes from './routes/fcm.js';
 import turnRoutes from './routes/turn.js';
+import linkPreviewRoutes from './routes/linkpreview.js';
+import mediaRoutes from './routes/media.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -84,6 +86,8 @@ async function main() {
   app.use('/api/auth', authRoutes);
   app.use('/api/fcm', fcmRoutes);
   app.use('/api/turn', turnRoutes);
+  app.use('/api/link-preview', linkPreviewRoutes);
+  app.use('/api/media', mediaRoutes);
 
   const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
   app.listen(PORT, () => {
