@@ -17,8 +17,9 @@ const vapidEmail = process.env.VAPID_EMAIL || 'admin@redon.app';
 let serviceAccount;
 
 try {
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT;
+    if (raw) {
+        serviceAccount = JSON.parse(raw);
         if (serviceAccount.private_key) {
             serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
         }
@@ -186,6 +187,19 @@ router.post('/send', async (req, res) => {
 router.post('/webhook', async (req, res) => {
   const startTime = Date.now();
   console.log('[FCM-WEBHOOK] Received webhook from Supabase');
+
+  // ─── Webhook Secret Verification ────────────────────────────────
+  const expectedSecret = process.env.FCM_WEBHOOK_SECRET;
+  const receivedSecret = req.headers['x-fcm-secret'] || req.headers['authorization'] || '';
+  if (expectedSecret) {
+    const match = receivedSecret === expectedSecret
+      || receivedSecret === `Bearer ${expectedSecret}`
+      || receivedSecret === `fcm-secret ${expectedSecret}`;
+    if (!match) {
+      console.warn('[FCM-WEBHOOK] Invalid secret — rejecting');
+      return res.status(401).json({ error: 'invalid webhook secret' });
+    }
+  }
 
   const { type, table, record } = req.body;
   console.log('[FCM-WEBHOOK] body keys:', Object.keys(req.body).join(', '));
