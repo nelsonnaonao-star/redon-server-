@@ -342,7 +342,12 @@ To run in production you need a deployed Express server:
 - **`/send` `.catch(() => {})` bug**: Removed the silent `.catch(() => {})` on messages path that swallowed FCM errors and falsely incremented `results.android` even when sends failed.
 - **Frontend `sendFcmPush`**: Removed `callerAvatar` from the data object sent to `/api/fcm/send`.
 
-### 8. QR Scan Unificado y Reparado (Jul 2026)
+### 8. Búsqueda de Contacto por Teléfono (Jul 2026)
+- **Root cause**: `searchUsers()` usaba `.eq('phone_number', cleanQuery)` para buscar por teléfono. Los números en DB están como `"+58 04123010229"` (con código de país, espacios, cero líder). El usuario escribe `4123010229` — el `eq` fallaba por formato distinto.
+- **Fix**: Cambiado a `.ilike('phone_number', '%{digits}%')` con `digits = query.replace(/\D/g, '')` — elimina todos los no-dígitos y busca con substring. Así coincide sin importar formato.
+- **`handlePhoneChange`**: Actualizado el filtro client-side para que también use `replace(/\D/g, '')`.
+
+### 9. QR Scan Unificado y Reparado (Jul 2026)
 - **Formato unificado**: Todos los QR ahora usan `redon://user/{userId}` (perfil) y `redon://group/{code}` (grupos). El scanner acepta ambos formatos más UUIDs planos y códigos cortos (backward compat).
 - **ProfileView**: QR de perfil ahora codifica `redon://user/{userId}` en vez del UUID plano.
 - **RedonIdCard**: QR ahora codifica `redon://user/{userId}` en vez de `tel:` o `redon://profile/{{redonId}}` (que el scanner no entendía). Se agregó prop `userId`.
