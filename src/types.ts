@@ -1,14 +1,52 @@
 export interface Message {
   id: string;
   sender: 'me' | 'them';
+  senderId?: string;
+  senderName?: string;
   text: string;
   time: string;
   status?: 'sending' | 'sent' | 'delivered' | 'read';
   audioUrl?: string;
   audioDuration?: number;
   mimeType?: string;
+  imageUrl?: string;
+  videoUrl?: string;
   isEdited?: boolean;
   isDeleted?: boolean;
+  replyToId?: string;
+  replyToText?: string;
+  replyToSender?: string;
+  isEphemeral?: boolean;
+  ephemeralExpiresAt?: string;
+  readBy?: { userId: string; name: string; readAt: string }[];
+  hasBeenViewed?: boolean;
+  pollId?: string;
+  stickerUrl?: string;
+  gifUrl?: string;
+  isAnimated?: boolean;
+}
+
+export interface PollOption {
+  id: string;
+  encuesta_id: string;
+  option_text: string;
+  image_url?: string;
+  created_at: string;
+  voteCount?: number;
+  voted?: boolean;
+}
+
+export interface Poll {
+  id: string;
+  title: string;
+  description?: string;
+  created_by: string;
+  multiple_choice: boolean;
+  starts_at: string;
+  expires_at?: string;
+  created_at: string;
+  options: PollOption[];
+  totalVotes: number;
 }
 
 export interface Chat {
@@ -17,6 +55,7 @@ export interface Chat {
   avatar: string;
   avatarColor?: string;
   lastMessage: string;
+  lastMessageStatus?: 'sending' | 'sent' | 'delivered' | 'read';
   time: string;
   unreadCount: number;
   isOnline: boolean;
@@ -25,6 +64,10 @@ export interface Chat {
   bio: string;
   messages: Message[];
   profileId?: string;
+  isGroup?: boolean;
+  participantIds?: string[];
+  adminId?: string;
+  isBlocked?: boolean;
 }
 
 export interface UserProfile {
@@ -34,6 +77,13 @@ export interface UserProfile {
   username: string;
   bio: string;
   realEmail?: string;
+  fontPreference?: string;
+  chatStyle?: string;
+  bubbleColor?: string;
+  partnerBubbleColor?: string;
+  privacyLastSeen?: 'everyone' | 'contacts' | 'nobody';
+  privacyOnline?: 'everyone' | 'contacts' | 'nobody';
+  privacyReadReceipts?: boolean;
 }
 
 export interface MomentAnimMeta {
@@ -45,7 +95,7 @@ export interface MomentAnimMeta {
   textColor?: string;
   textPositionX?: number;
   textPositionY?: number;
-  textBg?: boolean;
+  textBg?: string;
   activeFilter?: string;
 }
 
@@ -84,13 +134,33 @@ export interface ProductItem {
 }
 
 export type ActiveTab = 
-  | 'welcome' 
   | 'auth' 
   | 'chats' 
   | 'moments' 
+  | 'broadcasts' 
   | 'interests' 
   | 'emprendedor' 
   | 'profile';
+
+export interface BroadcastChannel {
+  id: string;
+  name: string;
+  description: string;
+  avatar_url: string;
+  admin_id: string;
+  created_at: string;
+  subscriber_count?: number;
+  is_subscribed?: boolean;
+  admin_name?: string;
+}
+
+export interface BroadcastMessage {
+  id: string;
+  channel_id: string;
+  sender_id: string;
+  text: string;
+  created_at: string;
+}
 
 export interface ChatStyle {
   bubbleColor: string;
@@ -102,11 +172,41 @@ export interface BusinessListing {
   id: string;
   businessName: string;
   description: string;
-  imageUrl: string;
+  imageUrls: string[];
   zone: string;
   category: string;
   contactName: string;
   contactPhone: string;
+  userId?: string;
+  bgMusicUrl?: string;
+  bgMusicName?: string;
+  layout?: 'card' | 'poster' | 'grid';
 }
 
+export interface AutoReplyConfig {
+  enabled: boolean;
+  message: string;
+  delay: number;
+}
 
+export interface FaqItem {
+  id: string;
+  question: string;
+  answer: string;
+  position: number;
+}
+
+export interface CallLog {
+  id: string;
+  chatId?: string;
+  callerId: string;
+  calleeId: string;
+  callType: 'audio' | 'video';
+  status: 'missed' | 'answered' | 'ended' | 'rejected' | 'cancelled' | 'ringing';
+  startedAt: string;
+  endedAt?: string;
+  duration: number;
+  contactName: string;
+  contactAvatar: string;
+  isIncoming: boolean;
+}

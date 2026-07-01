@@ -1668,6 +1668,106 @@ export async function getBlockedUserIds(): Promise<string[]> {
   return (data || []).map(r => r.blocked_id);
 }
 
+// ─── BROADCAST CHANNELS ──────────────────────────────────────────
+
+export async function getBroadcastChannels(userId: string): Promise<import('../types').BroadcastChannel[]> {
+  try {
+    const { data: channels } = await supabase
+      .from('broadcast_channels')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (!channels) return [];
+    const { data: subs } = await supabase
+      .from('broadcast_subscribers')
+      .select('channel_id')
+      .eq('user_id', userId);
+    const subSet = new Set((subs || []).map(s => s.channel_id));
+    const adminIds = [...new Set(channels.map(c => c.admin_id))];
+    const { data: admins } = await supabase
+      .from('profiles')
+      .select('id, name')
+      .in('id', adminIds);
+    const adminMap = new Map((admins || []).map(a => [a.id, a.name]));
+    const { data: counts } = await supabase
+      .from('broadcast_subscribers')
+      .select('channel_id');
+    const countMap = new Map<string, number>();
+    (counts || []).forEach(c => countMap.set(c.channel_id, (countMap.get(c.channel_id) || 0) + 1));
+    return channels.map(c => ({
+      id: c.id,
+      name: c.name,
+      description: c.description || '',
+      avatar_url: c.avatar_url || '',
+      admin_id: c.admin_id,
+      created_at: c.created_at,
+      subscriber_count: countMap.get(c.id) || 0,
+      is_subscribed: subSet.has(c.id),
+      admin_name: adminMap.get(c.admin_id) || 'Desconocido',
+    }));
+  } catch { return []; }
+}
+
+export async function createBroadcastChannel(name: string, description: string): Promise<string | null> {
+  const { data: user } = await supabase.auth.getUser();
+  if (!user?.user) return null;
+  const { data, error } = await supabase
+    .from('broadcast_channels')
+    .insert({ name, description, admin_id: user.user.id })
+    .select('id')
+    .single();
+  if (error) { console.error('[createBroadcast]', error.message); return null; }
+  return data?.id || null;
+}
+
+export async function subscribeToChannel(channelId: string): Promise<boolean> {
+  const { data: user } = await supabase.auth.getUser();
+  if (!user?.user) return false;
+  const { error } = await supabase
+    .from('broadcast_subscribers')
+    .insert({ channel_id: channelId, user_id: user.user.id });
+  if (error) { console.error('[subscribe]', error.message); return false; }
+  return true;
+}
+
+export async function unsubscribeFromChannel(channelId: string): Promise<boolean> {
+  const { data: user } = await supabase.auth.getUser();
+  if (!user?.user) return false;
+  const { error } = await supabase
+    .from('broadcast_subscribers')
+    .delete()
+    .eq('channel_id', channelId)
+    .eq('user_id', user.user.id);
+  if (error) { console.error('[unsubscribe]', error.message); return false; }
+  return true;
+}
+
+export async function getBroadcastMessages(channelId: string): Promise<import('../types').BroadcastMessage[]> {
+  try {
+    const { data } = await supabase
+      .from('broadcast_messages')
+      .select('*')
+      .eq('channel_id', channelId)
+      .order('created_at', { ascending: true });
+    return (data || []).map(m => ({
+      id: m.id,
+      channel_id: m.channel_id,
+      sender_id: m.sender_id,
+      text: m.text,
+      created_at: m.created_at,
+    }));
+  } catch { return []; }
+}
+
+export async function sendBroadcastMessage(channelId: string, text: string): Promise<boolean> {
+  const { data: user } = await supabase.auth.getUser();
+  if (!user?.user) return false;
+  const { error } = await supabase
+    .from('broadcast_messages')
+    .insert({ channel_id: channelId, sender_id: user.user.id, text });
+  if (error) { console.error('[sendBroadcast]', error.message); return false; }
+  return true;
+}
+
 // ─── AVATAR UPLOAD ───────────────────────────────────────────────
 
 export async function uploadAvatar(file: File): Promise<string> {
@@ -1969,4 +2069,10 @@ export const api = {
   getFlyerTemplates,
   uploadFlyerTemplate,
   uploadAvatar,
+  getBroadcastChannels,
+  createBroadcastChannel,
+  subscribeToChannel,
+  unsubscribeFromChannel,
+  getBroadcastMessages,
+  sendBroadcastMessage,
 };

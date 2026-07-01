@@ -17,8 +17,9 @@ const MomentsView = React.lazy(() => import('./components/MomentsView'));
 const InterestsView = React.lazy(() => import('./components/InterestsView'));
 const EmprendedorView = React.lazy(() => import('./components/EmprendedorView'));
 const ProfileView = React.lazy(() => import('./components/ProfileView'));
+const BroadcastView = React.lazy(() => import('./components/BroadcastView'));
 
-import { MessageSquare, User, Sparkles, DollarSign, TrendingUp, LogOut } from 'lucide-react';
+import { MessageSquare, User, Sparkles, DollarSign, TrendingUp, LogOut, Megaphone } from 'lucide-react';
 import { CallSuite } from './components/CallSuite';
 import Toast from './components/Toast';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -1180,6 +1181,11 @@ export default function App() {
                   <MomentsView profile={profile} moments={moments} onAddMoment={handleAddMoment} onDeleteMoment={handleDeleteMoment} userId={userId} />
                 </ErrorBoundary>
               </div>
+              <div className={`absolute inset-0 ${activeTab === 'broadcasts' ? '' : 'hidden'}`}>
+                <ErrorBoundary name="Canales">
+                  <BroadcastView userId={userId} />
+                </ErrorBoundary>
+              </div>
               <div className={`absolute inset-0 ${activeTab === 'interests' ? '' : 'hidden'}`}>
                 <ErrorBoundary name="Indicadores">
                   <InterestsView />
@@ -1216,6 +1222,10 @@ export default function App() {
                 label: 'Momentos',
                 icon: Sparkles,
                 dot: unseenMomentsCount > 0,
+              }, {
+                key: 'broadcasts',
+                label: 'Canales',
+                icon: Megaphone,
               }, {
                 key: 'interests',
                 label: 'Indicadores',

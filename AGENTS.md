@@ -392,3 +392,14 @@ To run in production you need a deployed Express server:
 - **`App.tsx`**: Replaced blue `bg-[#3390ec]` loading screen with `null` — no visual flash.
 - **`styles.xml`**: `windowSplashScreenAnimationDuration` set to `0` — Android 12+ native splash transitions instantly.
 - **Result**: Tap icon → brief Android native splash → chat list (no loading logo, no blue screens).
+
+### 16. Broadcast Channels (Canales) (Jul 2026)
+- **`supabase_broadcast.sql`**: New SQL migration creating `broadcast_channels` (id, name, description, avatar_url, admin_id, created_at), `broadcast_subscribers` (channel_id, user_id, subscribed_at), `broadcast_messages` (id, channel_id, sender_id, text, created_at) with RLS policies: channels readable by all authenticated users, subscribers manage own subs, messages readable by subscribers + admin, insert only by admin.
+- **`src/types.ts`**: Added `BroadcastChannel` (with subscriber_count, is_subscribed, admin_name), `BroadcastMessage` interfaces. Added `'broadcasts'` to `ActiveTab` union.
+- **`api.ts`**: 6 new functions — `getBroadcastChannels(userId)` (fetches channels + subscriber counts + admin names in batch), `createBroadcastChannel(name, description)`, `subscribeToChannel(channelId)`, `unsubscribeFromChannel(channelId)`, `getBroadcastMessages(channelId)`, `sendBroadcastMessage(channelId, text)`.
+- **`src/components/BroadcastView.tsx`**: New component with three views:
+  - **Channel list**: "Mis Canales" (subscribed) and "Descubrir" (public, unsubscribed) sections. Empty state with Megaphone icon.
+  - **Channel detail**: Scrollable message history with auto-scroll. Admin sees input bar with Send button; subscribers see Suscribirse/Desuscribirse toggle. Graceful empty state.
+  - **Create modal**: Bottom sheet with name + description fields, Cancel/Crear buttons.
+- **`App.tsx`**: Lazy-loaded `BroadcastView`. New "Canales" tab in bottom nav (between Momentos and Indicadores) with Megaphone icon. Render block wraps with `<ErrorBoundary name="Canales">`.
+- **Build**: `BroadcastView` is 9.27 KB in its own lazy chunk.
