@@ -85,8 +85,31 @@ To run in production you need a deployed Express server:
   6. Server `db.js`: Removed `push_tokens` table (only `password_reset_codes` remains for SMS recovery).
 - **User must configure in Supabase Dashboard**: Database → Webhooks → Create webhook: Table `messages`, Event `INSERT`, URL `https://redon-server.onrender.com/api/fcm/webhook`, HTTP method POST, trigger type "HTTP Request".
 
+### 12. FCM Call Push — Server-Side via Supabase Webhook (Jun 2026)
+- **Root cause**: Calls used `sendFcmPush()` from caller's frontend (`fetch` to `/api/fcm/send`). If caller minimized/killed the app, the HTTP request never completed — notification never fired.
+- **New flow**:
+  1. `handleStartCall` in `App.tsx` now inserts a row into Supabase `calls` table with `status: 'ringing'`.
+  2. Supabase Database Webhook (`calls` INSERT) → `POST /api/fcm/webhook` (same endpoint as messages).
+  3. `fcm.js` webhook handler now branches on `table === 'messages'` vs `table === 'calls'`.
+  4. Calls branch looks up callee's push tokens and sends FCM with `type: 'call'`, `channel_id: 'redon-calls'`, `tag: 'call-{chatId}'`.
+  5. The old `sendFcmPush()` frontend fallback is retained as best-effort redundancy.
+- **User must configure in Supabase Dashboard**: Database → Webhooks → Create webhook: Table `calls`, Event `INSERT`, URL `https://redon-server.onrender.com/api/fcm/webhook`, HTTP method POST, trigger type "HTTP Request".
+- **SQL**: `calls` status CHECK constraint updated to include `'ringing'`. If the table already exists, run the ALTER TABLE in `supabase_extensions.sql`.
+
+### 11. Chat Wallpaper No Se Aplicaba (Jun 2026)
+- **Root cause**: `onSelectWallpaper` en ChatDetail solo actualizaba el estado local `currentWallpaper` (que no se usa para renderizar el fondo), pero NUNCA llamaba a `onUpdateChatStyle`. El div de mensajes lee de `chatStyle.bubbleBackground` (prop de App.tsx), que nunca cambiaba.
+- **Fix**: `onSelectWallpaper` ahora llama a `onUpdateChatStyle({ ...chatStyle, bubbleBackground: wallpaperClass })` para propagar el cambio a App.tsx y localStorage. Además se agregó un `useEffect` que sincroniza `currentWallpaper` desde `chatStyle.bubbleBackground` al montar el componente, para que el checkmark en ChatWallpaper muestre el fondo activo.
+
+### 12. Moments No Se Veían en el Teléfono (Jun 2026)
+- **Root cause**: `handlePostMoment` cambió el bucket de `voice-notes` (funcional) a `moments` (nuevo). Si el bucket `moments` no es público o tiene restricciones de MIME type, la subida falla. Además, el fallback a `picsum.photos` fue eliminado sin reemplazo, y el `FileReader` en `handleFinishedEdit` no manejaba errores.
+- **Fix**: 
+  - `handlePostMoment` ahora intenta `voice-notes` primero, luego `moments` como fallback (buckets en array iterable)
+  - Se agregó `reader.onerror` en `handleFinishedEdit` con toast de error
+  - Se agregó botón "Continuar sin editar →" en la vista previa (salta MediaEditor)
+  - `supabase_storage.sql` actualizado con instrucciones claras: ⚠️ el bucket debe ser PÚBLICO
+- **Si sigue sin funcionar**: Verificar en Supabase Dashboard → Storage → `moments` → Public bucket = ON
+
 ## Known Issues (Not Yet Fixed)
-- **Supabase Storage bucket**: The `voice-notes` bucket must exist and have public read + authenticated insert RLS policies. If missing, audio upload falls back to local blob URL (sender can play, receiver cannot).
 - **Service worker scope**: Only applies to browser/PWA context. Capacitor native Android uses FCM SDK directly — no SW needed for native push.
 
 ## New Features
@@ -218,3 +241,103 @@ To run in production you need a deployed Express server:
 - `handleEditMessage` callback: updates local message text + `isEdited: true`, then calls `api.editMessage()`. Shows toast on error.
 - `handleDeleteMessage` callback: updates local message `isDeleted: true`, then calls `api.deleteMessage()`. Shows toast on error.
 - Both passed to `<ChatDetail>` via `onEditMessage` and `onDeleteMessage` props.
+
+### 7. MediaEditor Bottom Toolbar Hiding (Jun 2026)
+- **Root cause**: Bottom bar was a flex child competing for space with `flex-1` preview. On short mobile screens, the bar could be pushed outside viewport.
+- **Fix**: Changed outer container to `relative`, added `absolute bottom-0 left-0 right-0 z-50` wrapper around bottom bar, gave the motion container `paddingBottom: 140px` so the bar overlays the preview instead of taking flex space.
+
+### 8. Video Audio Loss in MediaEditor (Jun 2026)
+- **Root cause**: `AudioContext.createMediaElementSource(videoEl)` fails silently on Android WebView (Capacitor). The catch fell through to `proceeding without audio`, producing silent output video.
+- **Fix**: Replaced AudioContext approach with `(videoEl as any).captureStream()` — gets audio tracks directly from the HTMLVideoElement without needing AudioContext (which has mobile restrictions). Video is played briefly at normal speed before rendering to load audio data, then `captureStream()` extracts the audio tracks.
+
+### 9. Video/Image Fullscreen on Mobile (Jun 2026)
+- **Root cause**: Preview containers used `object-contain` + `max-h-full` which reserved space for the bottom bar, shrinking content on narrow phones.
+- **Fix**: Combined with Phase 1 layout fix (absolute bottom bar), the preview now uses full available height. Image uses `object-cover + absolute inset-0` (fills screen, may crop), video uses `object-contain` (shows full content without cropping).
+
+### 10. Glassmorphism in Chat Header/Footer Not Applying (Jun 2026)
+- **Root cause**: `hasImageBg` detection was fragile — only checked `chatStyle.bubbleBackground` for non-Tailwind values via negative logic (`!startsWith('bg-')`). Also `currentWallpaper` state was never synced from persisted `chatStyle.bubbleBackground` on mount, causing a stale default.
+- **Fix**: 
+  - Added `useEffect` that syncs `currentWallpaper` from `chatStyle.bubbleBackground` on mount/change
+  - Rewrote `hasImageBg` detection to check both `chatStyle.bubbleBackground` and `currentWallpaper` with positive logic: explicitly checks for `custom-img:[`, `pattern:`, or URL-like values (unsplash.com, http, data:image)
+  - Unified URL extraction (`extractUrl()` helper) across background layer + messages container styles
+  - Background layer now uses the same `chatStyle.bubbleBackground || currentWallpaper` fallback
+
+### 11. Kinetic Text Animation — Baked Canvas + Viewer Overlay Double Render (Jun 2026)
+- **Root cause**: `renderImageWithEdits` rendered text onto the canvas (baked into final static image) AND the moment viewer overlaid the same text with CSS animation on top, creating double text conflict — static text overlapped animated text, making animation invisible.
+- **Fix**: Changed canvas text render condition from `if (textOverlay)` to `if (textOverlay && textAnimation === 'none')`. When an animation preset is selected, the canvas skips text rendering so the viewer's animated overlay is the only text shown.
+
+### 13. Zoom Slider Fixed + Auto-Enhance Moved to Bottom Bar + Tool Labels (Jun 2026)
+- **Zoom slider**: Removed `saveState()` from `onChange` (was flooding undo stack on every drag), moved to `onMouseUp`/`onTouchEnd` matching other sliders. Added inline `touchAction: 'none'` for mobile responsiveness.
+- **Auto-Enhance moved**: Wand2 icon removed from floating right sidebar and added as a button in the bottom toolbar between Zoom and Exportar, with label "Mejorar".
+- **Tool labels**: All 14 bottom toolbar buttons now display a 7px text label below the icon (Filtros, Ajustes, Rotar, Texto, Recorte, etc.). Button height increased from `h-12` to `h-14` to accommodate text.
+
+### 14. Emprende Rápido Templates Removed from MediaEditor (Jun 2026)
+- **Root cause**: Redundant — same 6 business templates (Precio, Promoción, Horario, Producto, Servicio, Lanzamiento) already exist in EmprendedorView.
+- **Fix**: Removed `'emprende'` from `activeSubPanel` union type, removed the bottom toolbar Diamond button, removed the entire Emprende subpanel (motion div with 6 template buttons), removed `Diamond` from lucide-react import.
+
+### 15. Flyer Generator — Video Mode + Password Recovery + Vite 500 Fix (Jun 2026)
+- **5 video templates**: Reveal (slide up), Zoom (crece desde centro), Fade (brillo dorado + pulso), Bounce (rebote), Slide (desde lados). Each with timing: name 0.05→0.35, fields 0.35→0.70, location 0.70→0.85, hold 0.85→1.0
+- **Helper functions**: `vEase()`, `vLerp()`, `vDrawName()`, `vDrawField()`, `vDrawLoc()`, `vFieldCount()` reused across templates
+- **Flicker fix**: Replaced `Math.random()` in background decorations with deterministic arrays (dotPos, bPos)
+- **Duration slider**: 5–15s range input
+- **Animated preview**: play/pause with progress bar and seconds counter
+- **WebM export**: `canvas.captureStream(30)` + `MediaRecorder` auto-download
+- **Image/Video tabs**: toggle resets template index to 0
+- **Password recovery**: Removed username step (goes directly to phone), recovery code shown in yellow card without "Modo desarrollo" label, honest text "Ingresa tu número de teléfono para obtener el código de recuperación"
+- **Dead code removed**: `handleSendEmailRecovery`, `recoveryUsername`, `recoveryEmailSent`, `AtSign` import, `RecoveryStep 'username'`
+- **Vite 500 fix**: `Clock` was imported twice from `lucide-react` — `@babel/parser` (used by `@vitejs/plugin-react` for React Refresh) rejects duplicate import specifiers. Removed the duplicate `Clock` import.
+
+### 16. Flyer Generator — Animación Desacoplada del Fondo (Jun 2026)
+- **Unificación**: Se eliminó el toggle `fgMode` (`'image'`/`'video'`). Ahora el usuario siempre elige un fondo (plantilla o profesional) y opcionalmente una animación.
+- **`fgAnimationTemplate`**: Nuevo estado (`-1` = estático/PNG, `0-7` = preset de animación). Reemplazó a `fgMode`.
+- **`noBg` parameter**: Todos los 8 templates de video (`VIDEO_TEMPLATES`) ahora aceptan `noBg?: boolean`. Cuando es `true`, dibujan solo el texto animado sin su fondo propio.
+- **`drawFlyerBackground()`**: Nueva función que dibuja solo el fondo de la plantilla (gradiente/shapes o imagen profesional) sin texto, categoría y branding — usada por `renderVideoFrame()`.
+- **`renderVideoFrame()`**: Modificada para: 1) dibujar fondo con `drawFlyerBackground()`, 2) dibujar texto animado con `VIDEO_TEMPLATES[fgAnimationTemplate].render(..., true)`.
+- **Selector de animación**: Lista vertical debajo de las plantillas, con opción "Ninguna" (exportar como PNG estático).
+- **Publicación**: Botón único "Publicar en Negocios" — si hay animación seleccionada graba video WebM, si no exporta PNG.
+- **Duration slider**: Solo visible cuando hay animación seleccionada.
+- **Preview controls**: Botón play/pausa solo cuando hay animación.
+- **Fix Vite 500 (estructural)**: Se restauró `</div>` faltante que cerraba el contenedor externo de la sección de plantillas (eliminado accidentalmente al insertar plantillas profesionales).
+- **SQL migration**: `supabase_extensions.sql` contiene `CREATE TABLE flyer_templates` con RLS. El bucket `flyer-templates` debe crearse manualmente en Supabase Dashboard con política de lectura pública.
+
+## Phase 7 — Direct-to-Chat Launch (Jun 2026)
+
+### 1. Eliminated WelcomeView / OnboardingView
+- **Root cause**: App always launched to `WelcomeView` → `AuthView` → `OnboardingView` → Chat list. Returning users saw these intermediate screens on every cold start.
+- **Fix**:
+  - `activeTab` initial state changed from `'welcome'` to `'chats'` — app goes directly to chat list on launch.
+  - Removed `WelcomeView` (including lazy import and render block) — no more splash/greeting screen.
+  - Removed `OnboardingView` (including lazy import and render block) — no more onboarding flow.
+  - `handleAuthSuccess` now always sets `activeTab('chats')` instead of checking `onboarding_completed`.
+  - `ActiveTab` type simplified to `'auth' | 'chats' | 'moments' | 'interests' | 'emprendedor' | 'profile'`.
+  - `AuthView` only renders when `!userId` (user not logged in), wrapped in `<Suspense>` for lazy loading.
+  - `handleResetAppFlow` no longer sets tab to `'welcome'` — just signs out (user sees `AuthView` via `!userId`).
+
+### 2. Font Size Slider in MediaEditor — Custom Touch (Jul 2026)
+- **Root cause**: `<input type="range">` nativo en Android WebView de gama baja no respondía al touch. React re-render + CSS `-webkit-appearance: none` + eventos duplicados (`onChange` + `onInput`) causaban que el browser perdiera el foco táctil durante el arrastre.
+- **Fix**: Reemplazado por slider custom con `onPointerDown`/`onPointerMove` + `touchAction: none`. Usa `e.buttons !== 1` para detectar arrastre activo. Barra de progreso visual con divs absolutos (track bg-white/10 + fill bg-cyan-400 + thumb circle). Sin dependencia del motor nativo de range input.
+
+### 3. Profile Photo Upload to Storage (Jul 2026)
+- **Root cause**: Foto de perfil se guardaba como base64 inline en la DB → fotos grandes de cámara excedían límite de API de Supabase y se perdían.
+- **Fix**: Nueva `uploadAvatar()` en `api.ts` que comprime (512px, 60% calidad) y sube al bucket `avatars` de Supabase Storage. ProfileView ahora usa `api.uploadAvatar(file)` en vez de `FileReader.readAsDataURL`.
+- **SQL**: `supabase_avatars.sql` con RLS policies. Crear bucket `avatars` en Supabase Dashboard (público, image/*).
+
+### 4. Location Permission Denied (Jul 2026)
+- **Root cause**: AndroidManifest.xml no tenía `ACCESS_FINE_LOCATION` ni `ACCESS_COARSE_LOCATION`. El WebView bloqueaba `navigator.geolocation`.
+- **Fix**: Permisos agregados al manifest + `handleSendLocation` usa `@capacitor/geolocation` primero (native permission dialog), fallback a browser API. Instalado `npm install @capacitor/geolocation` + `npx cap sync android`.
+
+### 5. Group Creation Error (Jul 2026)
+- **Root cause**: Columnas `is_group` y `admin_id` nunca agregadas a tabla `chats` vía SQL. `createGroupChat` insertaba columnas inexistentes → error Supabase.
+- **Fix**: `supabase_group_fix.sql` agrega `is_group BOOLEAN DEFAULT false`, `admin_id UUID`, y política INSERT para `chats`.
+
+### 6. Poll Creation Error (Jul 2026)
+- **Root cause**: Tabla `poll_options` solo tenía política SELECT, no INSERT. Supabase bloqueaba el insert de opciones.
+- **Fix**: Agregada política `poll_options_insert_all` con `FOR INSERT WITH CHECK (auth.role() = 'authenticated')`.
+
+### 7. FCM Push Failure — Base64 Avatar in Data Payload (Jul 2026)
+- **Root cause**: `avatar_url` column stores inline base64 data URLs (`data:image/jpeg;base64,...`) — these are 10-20KB each. FCM data payloads are limited to **4096 bytes total**. Spreading `callerAvatar`/`senderAvatar` into the `data` object of `admin.messaging().send()` caused ALL pushes to be rejected with payload-too-large errors.
+- **Webhook calls path**: Removed `callerAvatar` from the FCM `data` payload (both Android native and web push).
+- **Webhook messages path**: Removed `senderAvatar` from FCM `data` payload.
+- **`/send` endpoint**: Added destructuring `const { callerAvatar, ...safeCallData } = callData` to strip base64 avatar before spreading into FCM payload.
+- **`/send` `.catch(() => {})` bug**: Removed the silent `.catch(() => {})` on messages path that swallowed FCM errors and falsely incremented `results.android` even when sends failed.
+- **Frontend `sendFcmPush`**: Removed `callerAvatar` from the data object sent to `/api/fcm/send`.

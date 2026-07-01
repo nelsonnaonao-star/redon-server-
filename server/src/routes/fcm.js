@@ -111,19 +111,20 @@ router.post('/send', async (req, res) => {
 
           if (isCall) {
             const callData = data || {};
+            const { callerAvatar, ...safeCallData } = callData;
             await admin.messaging().send({
               token: t.token,
               notification: { title: title || 'RED ON', body: notifBody },
               data: {
                 title: title || 'RED ON', body: notifBody,
                 badge: '1', notificationCount: '1',
-                ...callData,
+                ...safeCallData,
                 type: 'call',
               },
               android: {
                 priority: 'high', ttl: 86400000,
                 notification: {
-                  channel_id: 'redon-calls', tag: 'call-' + (callData.chatId || ''),
+                  channel_id: 'redon-calls', tag: 'call-' + (safeCallData.chatId || ''),
                   click_action: 'ANSWER_CALL', notification_count: 1,
                   visibility: 'public',
                 },
@@ -131,13 +132,15 @@ router.post('/send', async (req, res) => {
             });
           } else {
             const channelId = 'redon-messages';
+            const msgData = data || {};
+            const { callerAvatar: _, ...safeMsgData } = msgData;
             await admin.messaging().send({
               token: t.token,
               notification: { title: title || 'RED ON', body: notifBody },
               data: {
                 title: title || 'RED ON', body: notifBody,
                 badge: '1', notificationCount: '1',
-                ...(data || {}),
+                ...safeMsgData,
               },
               android: {
                 priority: 'high', ttl: 86400000,
@@ -146,7 +149,7 @@ router.post('/send', async (req, res) => {
                   click_action: 'OPEN_APP', notification_count: 1, visibility: 'public',
                 },
               },
-            }).catch(() => {});
+            });
           }
           results.android++;
         } catch (err) {
@@ -332,7 +335,6 @@ router.post('/webhook', async (req, res) => {
                 title: senderName, body: notifBody,
                 badge: '1', notificationCount: '1',
                 chatId: chat_id, type: 'message', contactId: sender_id,
-                senderAvatar,
               },
               android: {
                 priority: 'high', ttl: 86400000,
@@ -355,8 +357,8 @@ router.post('/webhook', async (req, res) => {
           const subscription = JSON.parse(t.token);
           await webpush.sendNotification(subscription, JSON.stringify({
             title: senderName, body: notifBody,
-            data: { chatId: chat_id, type: 'message', contactId: sender_id, senderAvatar },
-            icon: senderAvatar || '/icon.png', badge: '/badge.png',
+            data: { chatId: chat_id, type: 'message', contactId: sender_id },
+            icon: '/icon.png', badge: '/badge.png',
           }));
           results.web++;
         } catch (err) {
@@ -420,7 +422,7 @@ router.post('/webhook', async (req, res) => {
                 title: callerName, body: 'Llamada entrante',
                 badge: '1', notificationCount: '1',
                 chatId: chat_id, type: 'call',
-                callerId: caller_id, callerName, callerAvatar,
+                callerId: caller_id, callerName,
                 callType: call_type || 'audio',
               },
               android: {
@@ -445,7 +447,7 @@ router.post('/webhook', async (req, res) => {
           const subscription = JSON.parse(t.token);
           await webpush.sendNotification(subscription, JSON.stringify({
             title: callerName, body: 'Llamada entrante...',
-            data: { chatId: chat_id, type: 'call', callerId: caller_id, callerName, callerAvatar, callType: call_type || 'audio' },
+            data: { chatId: chat_id, type: 'call', callerId: caller_id, callerName, callType: call_type || 'audio' },
             icon: '/icon.png', badge: '/badge.png', requireInteraction: true,
           }));
           results.web++;
