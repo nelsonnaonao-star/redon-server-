@@ -232,22 +232,22 @@ export default function App() {
     }
   }, [profile?.fontPreference]);
 
+  // Hide native splash immediately at webview start
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) SplashScreen.hide();
+  }, []);
+
   // Restore session on mount + listen for auth changes
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
+      setAuthInit('ready');
       if (session) {
         setUserId(session.user.id);
         loadSavedPhones();
-        return loadUserData(session.user.id).then(() => {
-          setAuthInit('ready');
-          if (Capacitor.isNativePlatform()) SplashScreen.hide();
-        });
+        loadUserData(session.user.id);
       }
-      setAuthInit('ready');
-      if (Capacitor.isNativePlatform()) SplashScreen.hide();
     }).catch(() => {
       setAuthInit('ready');
-      if (Capacitor.isNativePlatform()) SplashScreen.hide();
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -1071,9 +1071,7 @@ export default function App() {
     <div className={`h-screen w-screen bg-bg-warm dark:bg-dark-bg text-text-primary dark:text-dark-text-primary font-sans flex flex-col overflow-hidden transition-colors duration-300 max-w-md mx-auto shadow-xl relative font-${fontPreference}`}>
       <Toast />
 
-      {authInit === 'pending' ? (
-        <div className="h-screen w-screen bg-[#3390ec]" />
-      ) : !userId ? (
+      {authInit === 'pending' ? null : !userId ? (
         <Suspense fallback={<div className="flex-1 flex items-center justify-center bg-bg-warm dark:bg-dark-bg"><div className="w-8 h-8 border-3 border-[#3390ec] border-t-transparent rounded-full animate-spin" /></div>}>
           <AuthView onLoginSuccess={handleAuthSuccess} />
         </Suspense>

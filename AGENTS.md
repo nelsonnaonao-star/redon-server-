@@ -381,3 +381,14 @@ To run in production you need a deployed Express server:
 - **`getMissedCallCount`**: New function counting calls with `status = 'missed'` where user is caller or callee.
 - **ContactSelector**: Added "Historial de llamadas" card with blue phone icon, missed-calls badge (rose), and descriptive subtitle. Tapping shows inline call history with filter tabs: Todas / Perdidas / Recibidas / Hechas.
 - **CallHistoryView**: Added same 4-tab filter bar, filtering client-side by `call.status` and `call.isIncoming`. Shows "No hay llamadas en este filtro" empty state.
+
+### 14. Delete Contact Now Removes Chat + Messages (Jul 2026)
+- **`api.ts:deleteContact`**: Now finds the shared chat via `chat_participants`, deletes own messages, removes self from `chat_participants`, then deletes contact. Re-adding creates a fresh chat.
+- **ContactSelector**: Shows confirm dialog "¿Estás seguro? Se eliminará el contacto y todo el historial de chat." Closes panel after deletion.
+
+### 15. Startup Speed: No Splash, No Blue Screen, No Auth Wait (Jul 2026)
+- **`capacitor.config.ts`**: `launchShowDuration: 0` + `launchAutoHide: true` — Capacitor splash hidden immediately.
+- **`App.tsx`**: `SplashScreen.hide()` called in separate `useEffect` on mount (no waiting for auth). `loadUserData` no longer blocks `authInit` — app renders immediately after session check, data loads in background.
+- **`App.tsx`**: Replaced blue `bg-[#3390ec]` loading screen with `null` — no visual flash.
+- **`styles.xml`**: `windowSplashScreenAnimationDuration` set to `0` — Android 12+ native splash transitions instantly.
+- **Result**: Tap icon → brief Android native splash → chat list (no loading logo, no blue screens).
