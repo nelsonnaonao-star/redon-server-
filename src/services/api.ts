@@ -867,10 +867,38 @@ export async function addContact(phone: string, name: string) {
 export async function deleteContact(profileId: string) {
   const { data: user } = await supabase.auth.getUser();
   if (!user?.user) throw new Error('No autenticado');
+  const userId = user.user.id;
+
+  // Find shared chat
+  const { data: myParts } = await supabase
+    .from('chat_participants')
+    .select('chat_id')
+    .eq('profile_id', userId);
+  const myChatIds = (myParts || []).map(p => p.chat_id);
+  let chatId: string | null = null;
+  if (myChatIds.length > 0) {
+    const { data: otherParts } = await supabase
+      .from('chat_participants')
+      .select('chat_id')
+      .in('chat_id', myChatIds)
+      .eq('profile_id', profileId)
+      .limit(1);
+    if (otherParts && otherParts.length > 0) {
+      chatId = otherParts[0].chat_id;
+    }
+  }
+
+  if (chatId) {
+    // Delete own messages in that chat
+    await supabase.from('messages').delete().eq('chat_id', chatId).eq('sender_id', userId);
+    // Remove self from chat participants (so re-add creates fresh chat)
+    await supabase.from('chat_participants').delete().eq('chat_id', chatId).eq('profile_id', userId);
+  }
+
   const { error } = await supabase
     .from('contacts')
     .delete()
-    .eq('user_id', user.user.id)
+    .eq('user_id', userId)
     .eq('contact_user_id', profileId);
   if (error) throw new Error(error.message);
 }

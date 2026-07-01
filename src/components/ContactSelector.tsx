@@ -60,11 +60,12 @@ export default function ContactSelector({
   }, [isOpen, userId]);
 
   const handleDeleteContact = async (contact: Chat) => {
-    if (!window.confirm('¿Estás seguro de que deseas eliminar este contacto?')) return;
+    if (!window.confirm('¿Estás seguro? Se eliminará el contacto y todo el historial de chat.')) return;
     try {
       await api.deleteContact(contact.id);
       setSavedContacts(prev => prev.filter(c => c.id !== contact.id));
       setSwipedContactId(null);
+      onClose();
     } catch {
       setSwipedContactId(null);
     }

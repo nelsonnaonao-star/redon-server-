@@ -11,15 +11,15 @@ interface ToastState {
 }
 
 const ICONS: Record<ToastType, React.ReactNode> = {
-  error: <AlertCircle className="w-4 h-4 text-rose-400" />,
-  info: <Info className="w-4 h-4 text-[#3390ec]" />,
-  success: <CheckCircle2 className="w-4 h-4 text-emerald-400" />,
+  error: <AlertCircle className="w-4 h-4 text-white/80" />,
+  info: <Info className="w-4 h-4 text-white/80" />,
+  success: <CheckCircle2 className="w-4 h-4 text-white/80" />,
 };
 
 const BG_CLASS: Record<ToastType, string> = {
-  error: 'bg-rose-500/10 border-rose-500/30',
-  info: 'bg-[#3390ec]/10 border-[#3390ec]/30',
-  success: 'bg-emerald-500/10 border-emerald-500/30',
+  error: 'bg-emerald-600 border-emerald-700 shadow-emerald-500/20',
+  info: 'bg-emerald-600 border-emerald-700 shadow-emerald-500/20',
+  success: 'bg-emerald-600 border-emerald-700 shadow-emerald-500/20',
 };
 
 export default function Toast() {
@@ -49,11 +49,11 @@ export default function Toast() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -20, scale: 0.95 }}
           transition={{ duration: 0.2 }}
-          className={`fixed top-4 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-2 px-4 py-2.5 rounded-xl border shadow-lg backdrop-blur-sm ${BG_CLASS[toast.type]} max-w-xs w-full mx-4`}
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-2 px-4 py-3 rounded-xl border shadow-lg ${BG_CLASS[toast.type]} max-w-xs w-full mx-4`}
         >
           {ICONS[toast.type]}
-          <span className="text-sm text-slate-800 dark:text-slate-200 flex-1">{toast.message}</span>
-          <button onClick={() => setVisible(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+          <span className="text-sm text-white font-medium flex-1">{toast.message}</span>
+          <button onClick={() => setVisible(false)} className="text-white/60 hover:text-white transition-colors">
             <X className="w-3.5 h-3.5" />
           </button>
         </motion.div>
