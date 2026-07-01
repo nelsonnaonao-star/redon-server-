@@ -342,7 +342,16 @@ To run in production you need a deployed Express server:
 - **`/send` `.catch(() => {})` bug**: Removed the silent `.catch(() => {})` on messages path that swallowed FCM errors and falsely incremented `results.android` even when sends failed.
 - **Frontend `sendFcmPush`**: Removed `callerAvatar` from the data object sent to `/api/fcm/send`.
 
-### 8. Custom Notification Sounds for Calls & Messages (Jul 2026)
+### 8. QR Scan Unificado y Reparado (Jul 2026)
+- **Formato unificado**: Todos los QR ahora usan `redon://user/{userId}` (perfil) y `redon://group/{code}` (grupos). El scanner acepta ambos formatos más UUIDs planos y códigos cortos (backward compat).
+- **ProfileView**: QR de perfil ahora codifica `redon://user/{userId}` en vez del UUID plano.
+- **RedonIdCard**: QR ahora codifica `redon://user/{userId}` en vez de `tel:` o `redon://profile/{{redonId}}` (que el scanner no entendía). Se agregó prop `userId`.
+- **ChatDetail**: QR de invitación de grupo ahora codifica `redon://group/{code}` en vez del código plano.
+- **ChatList.handleQrResult**: Reescrito para parsear el formato unificado. Ahora navega al grupo al unirse (faltaba `onSelectChat`). Fixed stale closure — `onSelectChat` agregado al dependency array.
+- **Cámara**: Mejor mensaje de error cuando el permiso es denegado ("Permiso de cámara denegado"). `scanFrame` envuelto en try/catch para evitar crashes.
+- **`html5-qrcode` eliminado**: Dependencia muerta (~40KB) que nunca se usaba — la app usa `jsQR` directamente.
+
+### 9. Custom Notification Sounds for Calls & Messages (Jul 2026)
 - **Root cause**: Background/killed FCM notifications used the Android **channel's** sound setting. If the channel was created before custom sound config was deployed, the system default notification sound played instead of the app's custom sounds.
 - **FCM payload**: Added `sound: 'ringtone'` to `android.notification` in calls path (both webhook and `/send` endpoint) — overrides channel sound.
 - **FCM payload**: Added `sound: 'notificacion'` to `android.notification` in messages path (both webhook and `/send` endpoint).
