@@ -341,3 +341,10 @@ To run in production you need a deployed Express server:
 - **`/send` endpoint**: Added destructuring `const { callerAvatar, ...safeCallData } = callData` to strip base64 avatar before spreading into FCM payload.
 - **`/send` `.catch(() => {})` bug**: Removed the silent `.catch(() => {})` on messages path that swallowed FCM errors and falsely incremented `results.android` even when sends failed.
 - **Frontend `sendFcmPush`**: Removed `callerAvatar` from the data object sent to `/api/fcm/send`.
+
+### 8. Custom Notification Sounds for Calls & Messages (Jul 2026)
+- **Root cause**: Background/killed FCM notifications used the Android **channel's** sound setting. If the channel was created before custom sound config was deployed, the system default notification sound played instead of the app's custom sounds.
+- **FCM payload**: Added `sound: 'ringtone'` to `android.notification` in calls path (both webhook and `/send` endpoint) — overrides channel sound.
+- **FCM payload**: Added `sound: 'notificacion'` to `android.notification` in messages path (both webhook and `/send` endpoint).
+- **`CallFcmService.java`**: Changed `.setDefaults(NotificationCompat.DEFAULT_ALL)` to `DEFAULT_VIBRATE | DEFAULT_LIGHTS` to prevent DEFAULT_SOUND from conflicting with `.setSound()`.
+- **Sound files**: Custom MP3s (`ringtone.mp3`, `notificacion.mp3`) in `res/raw/` match the improved versions in `public/sounds/`.

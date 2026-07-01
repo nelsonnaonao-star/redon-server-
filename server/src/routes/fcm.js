@@ -126,7 +126,7 @@ router.post('/send', async (req, res) => {
                 notification: {
                   channel_id: 'redon-calls', tag: 'call-' + (safeCallData.chatId || ''),
                   click_action: 'ANSWER_CALL', notification_count: 1,
-                  visibility: 'public',
+                  visibility: 'public', sound: 'ringtone',
                 },
               },
             });
@@ -147,6 +147,7 @@ router.post('/send', async (req, res) => {
                 notification: {
                   channel_id: channelId, tag: data?.chatId || 'redon-message',
                   click_action: 'OPEN_APP', notification_count: 1, visibility: 'public',
+                  sound: 'notificacion',
                 },
               },
             });
@@ -341,6 +342,7 @@ router.post('/webhook', async (req, res) => {
                 notification: {
                   channel_id: 'redon-messages', tag: chat_id,
                   click_action: 'OPEN_APP', notification_count: 1, visibility: 'public',
+                  sound: 'notificacion',
                 },
               },
             });
@@ -430,7 +432,7 @@ router.post('/webhook', async (req, res) => {
                 notification: {
                   channel_id: 'redon-calls', tag: 'call-' + chat_id,
                   click_action: 'ANSWER_CALL', notification_count: 1,
-                  visibility: 'public',
+                  visibility: 'public', sound: 'ringtone',
                 },
               },
             });
