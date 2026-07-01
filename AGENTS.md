@@ -356,9 +356,28 @@ To run in production you need a deployed Express server:
 - **Cámara**: Mejor mensaje de error cuando el permiso es denegado ("Permiso de cámara denegado"). `scanFrame` envuelto en try/catch para evitar crashes.
 - **`html5-qrcode` eliminado**: Dependencia muerta (~40KB) que nunca se usaba — la app usa `jsQR` directamente.
 
-### 9. Custom Notification Sounds for Calls & Messages (Jul 2026)
+### 10. Custom Notification Sounds for Calls & Messages (Jul 2026)
 - **Root cause**: Background/killed FCM notifications used the Android **channel's** sound setting. If the channel was created before custom sound config was deployed, the system default notification sound played instead of the app's custom sounds.
 - **FCM payload**: Added `sound: 'ringtone'` to `android.notification` in calls path (both webhook and `/send` endpoint) — overrides channel sound.
 - **FCM payload**: Added `sound: 'notificacion'` to `android.notification` in messages path (both webhook and `/send` endpoint).
 - **`CallFcmService.java`**: Changed `.setDefaults(NotificationCompat.DEFAULT_ALL)` to `DEFAULT_VIBRATE | DEFAULT_LIGHTS` to prevent DEFAULT_SOUND from conflicting with `.setSound()`.
 - **Sound files**: Custom MP3s (`ringtone.mp3`, `notificacion.mp3`) in `res/raw/` match the improved versions in `public/sounds/`.
+
+### 11. FCM Avatar Payload Reduced (Jul 2026)
+- **Root cause**: `avatar_url` stores inline base64 data URLs (10–20 KB each). FCM data payload limit is 4096 bytes total. Spreading `callerAvatar`/`senderAvatar` into `admin.messaging().send()` data caused ALL pushes to be rejected.
+- **Calls webhook**: Removed `callerAvatar` from FCM data payload.
+- **Messages webhook**: Removed `senderAvatar` from FCM data payload.
+- **`/send` endpoint**: Destructured `const { callerAvatar, ...safeCallData } = callData` to strip base64 avatar.
+- **`.catch(() => {})` removed**: Messages path silently swallowed errors and falsely incremented `results.android`.
+- **Frontend `sendFcmPush`**: No longer sends `callerAvatar` in data object.
+
+### 12. Phone Search Normalized (Jul 2026)
+- **`api.ts:searchUsers`**: Changed from `.eq('phone_number', cleanQuery)` to `.ilike('phone_number', '%{digits}%')` with `digits = query.replace(/\D/g, '')` — matches regardless of country code, spaces, or leading zero.
+- **`ContactSelector.tsx:handlePhoneChange`**: Client-side filter also uses `replace(/\D/g, '')`.
+
+### 13. Call History Fixed + Missed Calls Badge (Jul 2026)
+- **Root cause**: `getCallHistory` used FK JOINs (`calls!calls_caller_id_fkey`, `calls!calls_callee_id_fkey`) that don't exist in Supabase schema cache — always returned `[]`.
+- **Fix**: Rewrote with `select('*')` then batch-fetch profiles from `profiles` table via `Map<id, profile>` lookup.
+- **`getMissedCallCount`**: New function counting calls with `status = 'missed'` where user is caller or callee.
+- **ContactSelector**: Added "Historial de llamadas" card with blue phone icon, missed-calls badge (rose), and descriptive subtitle. Tapping shows inline call history with filter tabs: Todas / Perdidas / Recibidas / Hechas.
+- **CallHistoryView**: Added same 4-tab filter bar, filtering client-side by `call.status` and `call.isIncoming`. Shows "No hay llamadas en este filtro" empty state.

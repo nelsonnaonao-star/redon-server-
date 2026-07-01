@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Chat } from '../types';
-import { Search, X, User, Phone, Text, Info, Plus, ArrowLeft, CheckCircle2, AlertCircle, Users, Check, Scan, Trash2 } from 'lucide-react';
+import { Search, X, User, Phone, PhoneMissed, Text, Info, Plus, ArrowLeft, CheckCircle2, AlertCircle, Users, Check, Scan, Trash2 } from 'lucide-react';
 import CountryCodePicker from './CountryCodePicker';
 import { api } from '../services/api';
 
@@ -38,6 +38,26 @@ export default function ContactSelector({
   const [searchingUser, setSearchingUser] = useState(false);
   const [detectedUser, setDetectedUser] = useState<any>(null);
   const [swipedContactId, setSwipedContactId] = useState<string | null>(null);
+  const [showCallHistory, setShowCallHistory] = useState(false);
+  const [missedCallCount, setMissedCallCount] = useState(0);
+  const [callsLoading, setCallsLoading] = useState(false);
+  const [calls, setCalls] = useState<import('../types').CallLog[]>([]);
+  const [callFilter, setCallFilter] = useState<'all' | 'missed' | 'received' | 'made'>('all');
+
+  useEffect(() => {
+    if (!isOpen || !showCallHistory || !userId) return;
+    setCallsLoading(true);
+    (async () => {
+      const history = await api.getCallHistory(userId);
+      setCalls(history);
+      setCallsLoading(false);
+    })();
+  }, [isOpen, showCallHistory, userId]);
+
+  useEffect(() => {
+    if (!isOpen || !userId) return;
+    api.getMissedCallCount(userId).then(setMissedCallCount).catch(() => {});
+  }, [isOpen, userId]);
 
   const handleDeleteContact = async (contact: Chat) => {
     if (!window.confirm('¿Estás seguro de que deseas eliminar este contacto?')) return;
@@ -144,16 +164,16 @@ export default function ContactSelector({
     <div className="absolute inset-0 bg-[#f0f2f5] z-50 flex flex-col anim-slide-up-full overflow-hidden font-sans">
       <header className="bg-white px-5 py-4 flex items-center justify-between border-b border-slate-100 flex-shrink-0 shadow-xs">
         <div className="flex items-center gap-2.5">
-          <button onClick={showCreateGroup ? () => setShowCreateGroup(false) : showAddNewContact ? () => setShowAddNewContact(false) : onClose}
+          <button onClick={showCreateGroup ? () => setShowCreateGroup(false) : showAddNewContact ? () => setShowAddNewContact(false) : showCallHistory ? () => setShowCallHistory(false) : onClose}
             className="p-1.5 -ml-1 rounded-full text-slate-500 hover:bg-slate-150 transition-colors cursor-pointer" title="Volver">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
             <h3 className="text-slate-900 font-bold text-base leading-none">
-              {showCreateGroup ? 'Nuevo Grupo' : showAddNewContact ? 'Nuevo Contacto' : 'Nuevo Chat'}
+              {showCreateGroup ? 'Nuevo Grupo' : showAddNewContact ? 'Nuevo Contacto' : showCallHistory ? 'Historial de llamadas' : 'Nuevo Chat'}
             </h3>
             <p className="text-[10px] text-slate-400 mt-1 font-semibold leading-tight">
-              {showCreateGroup ? 'Selecciona participantes' : showAddNewContact ? 'Añade por número de teléfono' : 'Elige un contacto'}
+              {showCreateGroup ? 'Selecciona participantes' : showAddNewContact ? 'Añade por número de teléfono' : showCallHistory ? 'Llamadas hechas, recibidas y perdidas' : 'Elige un contacto'}
             </p>
           </div>
         </div>
@@ -225,6 +245,81 @@ export default function ContactSelector({
               )}
             </div>
           </>
+        ) : showCallHistory ? (
+          <>
+            {callsLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <div className="w-6 h-6 border-2 border-[#3390ec] border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : calls.length === 0 ? (
+              <div className="text-center py-16">
+                <Phone className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+                <p className="text-slate-400 text-sm font-medium">Sin llamadas aún</p>
+                <p className="text-[10px] text-slate-300 mt-1">Las llamadas aparecerán aquí</p>
+              </div>
+            ) : (
+              <div className="max-w-md mx-auto space-y-4">
+                {/* Filtros */}
+                <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl">
+                  {(['all', 'missed', 'received', 'made'] as const).map(f => {
+                    const labels = { all: 'Todas', missed: 'Perdidas', received: 'Recibidas', made: 'Hechas' };
+                    return (
+                      <button key={f} onClick={() => setCallFilter(f)}
+                        className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                          callFilter === f
+                            ? 'bg-white text-slate-900 shadow-xs'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}>
+                        {labels[f]}
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* Lista */}
+                <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-xs divide-y divide-slate-50">
+                  {calls.filter(c => {
+                    if (callFilter === 'missed') return c.status === 'missed';
+                    if (callFilter === 'received') return c.isIncoming && c.status !== 'missed';
+                    if (callFilter === 'made') return !c.isIncoming;
+                    return true;
+                  }).map(call => (
+                    <div key={call.id} onClick={() => { onSelectContact(call.chatId || call.callerId === userId ? call.calleeId : call.callerId); }}
+                      className="px-4 py-3.5 flex items-center gap-3.5 hover:bg-slate-50 cursor-pointer transition-colors">
+                      <div className="relative flex-shrink-0">
+                        {call.contactAvatar ? (
+                          <img src={call.contactAvatar} alt="" className="w-11 h-11 rounded-full object-cover border border-slate-50 shadow-xs" />
+                        ) : (
+                          <div className="w-11 h-11 rounded-full bg-slate-300 text-white font-bold text-xs flex items-center justify-center border border-white shadow-xs">
+                            {call.contactName.charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        {call.status === 'missed' && (
+                          <span className="absolute -top-1 -right-1 w-[18px] h-[18px] bg-rose-500 rounded-full flex items-center justify-center ring-2 ring-white">
+                            <PhoneMissed className="w-2.5 h-2.5 text-white" />
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-slate-900 font-bold text-sm tracking-tight truncate">{call.contactName}</h4>
+                          <span className="text-[10px] text-slate-400 ml-2 whitespace-nowrap">
+                            {call.startedAt ? new Date(call.startedAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }) : ''}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <Phone className={`w-3 h-3 ${call.status === 'missed' ? 'text-rose-500' : call.isIncoming ? 'text-emerald-500' : 'text-[#3390ec]'}`} />
+                          <span className={`text-[10px] ${call.status === 'missed' ? 'text-rose-500 font-medium' : 'text-slate-400'}`}>
+                            {call.status === 'missed' ? 'Perdida' : call.isIncoming ? 'Recibida' : 'Hecha'}
+                            {call.duration > 0 && ` · ${Math.floor(call.duration / 60)}:${String(call.duration % 60).padStart(2, '0')}`}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         ) : !showAddNewContact ? (
           <>
             <div className="max-w-md mx-auto relative select-none">
@@ -250,6 +345,30 @@ export default function ContactSelector({
                     <h4 className="text-slate-900 font-bold text-sm tracking-tight leading-tight">Nuevo Grupo</h4>
                     <p className="text-[10px] text-slate-400 mt-0.5">Crea un grupo con varios contactos</p>
                   </div>
+                </div>
+              </div>
+
+              {/* Historial de llamadas */}
+              <div onClick={() => setShowCallHistory(true)}
+                className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-xs cursor-pointer hover:bg-slate-50 transition-colors relative">
+                <div className="px-4 py-3.5 flex items-center gap-3.5">
+                  <div className="w-11 h-11 rounded-full bg-[#3390ec] text-white flex items-center justify-center relative">
+                    <Phone className="w-5 h-5" />
+                    {missedCallCount > 0 && (
+                      <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-rose-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center px-1 shadow-lg ring-2 ring-white">
+                        {missedCallCount > 99 ? '99+' : missedCallCount}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-slate-900 font-bold text-sm tracking-tight leading-tight">Historial de llamadas</h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {missedCallCount > 0
+                        ? `${missedCallCount} llamada${missedCallCount !== 1 ? 's' : ''} perdida${missedCallCount !== 1 ? 's' : ''}`
+                        : 'Llamadas hechas, recibidas y perdidas'}
+                    </p>
+                  </div>
+                  <ArrowLeft className="w-4 h-4 text-slate-300 rotate-180" />
                 </div>
               </div>
 

@@ -1509,18 +1509,22 @@ export async function getCallHistory(userId: string): Promise<import('../types')
   try {
     const { data } = await supabase
       .from('calls')
-      .select(`
-        id, chat_id, caller_id, callee_id, call_type, status, started_at, ended_at, duration,
-        caller:profiles!calls_caller_id_fkey(id, name, avatar, username),
-        callee:profiles!calls_callee_id_fkey(id, name, avatar, username)
-      `)
+      .select('*')
       .or(`caller_id.eq.${userId},callee_id.eq.${userId}`)
       .order('started_at', { ascending: false })
       .limit(100);
     if (!data) return [];
+    const profileIds = new Set<string>();
+    data.forEach(r => { profileIds.add(r.caller_id); profileIds.add(r.callee_id); });
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, name, avatar_url, username')
+      .in('id', [...profileIds]);
+    const profileMap = new Map((profiles || []).map(p => [p.id, p]));
     return data.map((row: any) => {
       const isIncoming = row.callee_id === userId;
-      const contact = isIncoming ? row.caller : row.callee;
+      const contactId = isIncoming ? row.caller_id : row.callee_id;
+      const profile = profileMap.get(contactId);
       return {
         id: row.id,
         chatId: row.chat_id || '',
@@ -1531,13 +1535,26 @@ export async function getCallHistory(userId: string): Promise<import('../types')
         startedAt: row.started_at || '',
         endedAt: row.ended_at || undefined,
         duration: row.duration || 0,
-        contactName: contact?.name || contact?.username || 'Desconocido',
-        contactAvatar: contact?.avatar || '',
+        contactName: profile?.name || profile?.username || 'Desconocido',
+        contactAvatar: profile?.avatar_url || '',
         isIncoming,
       };
     });
   } catch {
     return [];
+  }
+}
+
+export async function getMissedCallCount(userId: string): Promise<number> {
+  try {
+    const { count } = await supabase
+      .from('calls')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'missed')
+      .or(`callee_id.eq.${userId},caller_id.eq.${userId}`);
+    return count || 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -1894,6 +1911,7 @@ export const api = {
   deleteMessage,
   deleteChat,
   getCallHistory,
+  getMissedCallCount,
   getAutoReplyConfig,
   updateAutoReplyConfig,
   insertCall,
