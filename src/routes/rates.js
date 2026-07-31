@@ -122,9 +122,9 @@ async function scrapeBCV() {
 
 async function fetchFreshRates() {
   const sources = [
+    { fn: scrapeBCV, name: 'bcv.org.ve' },
     { fn: fetchFromVeDolarApi, name: 've.dolarapi' },
     { fn: fetchBcvToday, name: 'bcv.today' },
-    { fn: scrapeBCV, name: 'bcv.org.ve' },
   ];
 
   for (const source of sources) {
